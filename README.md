@@ -1,157 +1,154 @@
-# DC Motor Speed Control System
+# 直流电机速度控制系统
 
-**Author**: Yuqi Li — s336721
-**Course**: Electronics for Embedded Systems — Politecnico di Torino
-
----
-
-## What This System Does
-
-The user turns a potentiometer to set a target speed.
-The STM32 reads sensors, runs a cascade PID algorithm, and sends a PWM command to the FPGA.
-The FPGA generates the PWM waveform to drive the motor.
-The OLED shows target and actual speed in real time.
+**作者**：Yuqi Li — s336721
+**课程**：Electronics for Embedded Systems — Politecnico di Torino
 
 ---
 
-## Hardware Architecture
+## 系统功能
+
+用电位器设定目标转速，STM32读取传感器数据，运行串级PID算法，
+通过SPI把PWM指令发给FPGA，FPGA生成PWM波驱动电机，OLED实时显示目标和实际转速。
+
+---
+
+## 硬件架构
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  SENSING                                                                 │
+│  感知层（SENSING）                                                        │
 │                                                                          │
-│  [Potentiometer] → [RC Filter] ──────────────→ STM32 ADC (PA3, CH3)    │
+│  [电位器] → [RC低通滤波] ────────────────→ STM32 ADC（PA3，通道3）      │
 │                                                                          │
-│  [Motor] → [Encoder] ───────────────────────→ STM32 TIM2 encoder mode  │
+│  [电机] → [编码器] ─────────────────────→ STM32 TIM2 编码器模式        │
 │                                                                          │
-│  [Motor] → [Shunt 0.1Ω] → [INA240 ×20] ───→ STM32 ADC (PA2, CH2)     │
+│  [电机] → [分流电阻 0.1Ω] → [INA240 ×20] → STM32 ADC（PA2，通道2）   │
 └──────────────────────────────────────────────────────────────────────────┘
-                          │ target_speed, actual_speed, actual_current
-                          ▼
+                  │ 目标转速、实际转速、实际电流
+                  ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  DECISION MAKING  (STM32, runs every 10 ms)                             │
+│  决策层（DECISION MAKING）  STM32 每 10ms 执行一次                       │
 │                                                                          │
-│   target_speed ──→ [Outer loop: Speed PI] ──→ target_current           │
-│   actual_speed ──↗                                  │                   │
-│                                                      ▼                   │
-│                    target_current ──→ [Inner loop: Current PI] ──→ pwm_duty (0~1000)
-│                    actual_current ──↗                                    │
+│   目标转速 ──→ [外环：速度PI] ──→ 目标电流                             │
+│   实际转速 ──↗                         │                                │
+│                                         ▼                                │
+│                  目标电流 ──→ [内环：电流PI] ──→ PWM占空比（0~1000）   │
+│                  实际电流 ──↗                                            │
 └──────────────────────────────────────────────────────────────────────────┘
-                          │ pwm_duty via SPI
-                          ▼
+                  │ PWM占空比，通过SPI发送
+                  ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  ACTUATION                                                               │
+│  执行层（ACTUATION）                                                      │
 │                                                                          │
-│  STM32 ──SPI──→ FPGA (Spartan-6) ──→ PWM generator ──→ TB6612 PWMA    │
-│                                        20 kHz PWM                        │
-│  STM32 ──GPIO──→ TB6612 AIN1/AIN2/STBY  (direction + enable)           │
-│                  TB6612 ──→ Motor (12 V DC, JGA25-370)                  │
+│  STM32 ──SPI──→ FPGA（Spartan-6）──→ PWM生成器 ──→ TB6612 PWMA引脚    │
+│                                        20kHz PWM                         │
+│  STM32 ──GPIO──→ TB6612 AIN1/AIN2/STBY（方向控制 + 使能）              │
+│                  TB6612 ──→ 电机（12V直流，JGA25-370）                  │
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  SUPPORT                                                                 │
+│  支撑系统（SUPPORT）                                                      │
 │                                                                          │
-│  W25Q64 Flash ──SPI──→ STM32  (PID Kp/Ki saved here, loaded at boot)  │
-│  OLED SSD1306 ──I2C──→ STM32  (shows target RPM and actual RPM)        │
-│  PC           ←─UART── STM32  (prints T / A / I / PWM every 10 ms)    │
+│  W25Q64 Flash ──SPI──→ STM32  （存储PID参数，上电时自动读取）           │
+│  OLED SSD1306 ──I2C──→ STM32  （显示目标转速和实际转速）               │
+│  电脑          ←─UART── STM32  （每10ms打印 T/A/I/PWM 调试信息）       │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Why a Cascade PID?
+## 为什么用串级PID？
 
-The professor flagged that reading just one ADC value is not non-trivial.
-The solution adds **real current feedback** from the motor, enabling a two-loop controller:
+老师指出只读一路ADC不够。解决方案是加入**真实电流反馈**，实现两环控制：
 
 ```
-  target_speed ──→ [Speed PI]   ──→  target_current
-  actual_speed ──↗
-                                       target_current ──→ [Current PI] ──→ pwm_duty
-                                       actual_current ──↗
-                                       (shunt → INA240 → ADC)
+  目标转速 ──→ [速度环PI] ──→ 目标电流
+  实际转速 ──↗
+                               目标电流 ──→ [电流环PI] ──→ PWM占空比
+                               实际电流 ──↗
+                              （分流电阻 → INA240 → ADC）
 ```
 
-- Speed loop: slow, sets how much current the motor needs
-- Current loop: fast, adjusts PWM directly based on actual current
-- Benefit: load changes are corrected by the current loop before speed even drops
+- **速度环（外环）**：慢，根据转速误差算出电机需要多大电流
+- **电流环（内环）**：快，根据电流误差直接调整PWM占空比
+- **好处**：负载突变时，电流环在转速还没变化前就已经补偿，响应更快
 
 ---
 
-## Course Requirement Coverage
+## 课程要求覆盖情况
 
-| Course Topic | How This Project Covers It |
-|---|---|
-| **Memories** | W25Q64 SPI Flash. Hand-written protocol: write enable → sector erase → page program → status poll → read. No library. |
-| **Programmable Logic** | FPGA Spartan-6 AX309. Verilog: SPI slave (`spi_slave.v`) + 20 kHz PWM generator (`pwm_gen.v`). |
-| **Interconnections** | SPI (to FPGA and Flash), I2C (OLED), UART (PC). Three protocols, all register-level. |
-| **Processor Peripherals** | STM32 ADC, TIM2, SPI1, I2C1, USART1 — direct register access only. No HAL. |
-| **AD/DA Conversion** | **AD**: RC hardware filter + 2-channel ADC (potentiometer + INA240 current sense) + software moving average. **DA**: FPGA PWM controls motor power analogously. |
-| **Power Management** | TB6612FNG H-bridge. Controlled by FPGA PWM (speed) + STM32 GPIO (direction/enable). Drives 12 V motor. |
+| 课程要求 | 本项目的实现方式 |
+|---------|----------------|
+| **存储器（Memories）** | W25Q64 SPI Flash：手写完整协议（写使能→扇区擦除→页编程→轮询BUSY→读取），不用任何库 |
+| **可编程逻辑（Programmable Logic）** | FPGA Spartan-6 AX309：Verilog代码实现SPI从机（`spi_slave.v`）和20kHz PWM生成器（`pwm_gen.v`） |
+| **互联（Interconnections）** | 三种通信协议：SPI（FPGA+Flash）、I2C（OLED）、UART（PC调试），全部寄存器级实现 |
+| **处理器外设（Processor Peripherals）** | STM32的ADC、TIM2、SPI1、I2C1、USART1，全部直接操作寄存器，不用HAL库 |
+| **模数/数模转换（AD/DA）** | **AD**：RC硬件滤波 + 双通道ADC（电位器+INA240电流采样）+ 软件滑动平均。**DA**：FPGA PWM控制电机功率 |
+| **电源管理（Power Management）** | TB6612FNG H桥驱动：FPGA PWM控制速度，STM32 GPIO控制方向/使能，驱动12V电机 |
 
 ---
 
-## File Structure
+## 文件结构
 
 ```
 Project/
-├── README.md                         ← This file
-├── Electronics_Project_Proposal.pdf  ← Approved project proposal
-├── 购买好的材料清单                   ← Hardware list (with missing parts noted)
+├── README.md                         ← 本文件
+├── Electronics_Project_Proposal.pdf  ← 已批准的项目提案
+├── 购买好的材料清单                   ← 硬件清单（含待购组件）
 │
-├── STM32/                            ← MCU firmware (C, direct register access)
-│   ├── README.md                     ← Full pin assignment table
+├── STM32/                            ← MCU固件（C语言，直接寄存器操作）
+│   ├── README.md                     ← 引脚分配完整表格
 │   ├── Inc/
-│   │   ├── uart.h     UART debug output
-│   │   ├── adc.h      ADC: potentiometer + current sense
-│   │   ├── encoder.h  TIM2 encoder mode → RPM
-│   │   ├── spi.h      SPI master: FPGA command + Flash protocol
-│   │   ├── i2c.h      I2C + OLED SSD1306 driver
-│   │   ├── motor.h    TB6612 direction and enable (GPIO)
-│   │   └── pid.h      Cascade PI: speed loop + current loop
+│   │   ├── uart.h     UART串口调试
+│   │   ├── adc.h      ADC：电位器采样 + 电流采样
+│   │   ├── encoder.h  TIM2编码器模式 → 转速RPM
+│   │   ├── spi.h      SPI主机：发PWM指令给FPGA + Flash读写协议
+│   │   ├── i2c.h      I2C + OLED SSD1306驱动
+│   │   ├── motor.h    TB6612方向控制和使能（GPIO）
+│   │   └── pid.h      串级PI算法：速度环 + 电流环
 │   └── Src/
-│       ├── main.c     Boot sequence + 10 ms control loop
-│       ├── uart.c     ✅ Complete (Stage 1 done)
-│       ├── adc.c      TODO: Stage 2 + 7
-│       ├── encoder.c  TODO: Stage 3
-│       ├── i2c.c      TODO: Stage 4
-│       ├── spi.c      TODO: Stage 6 (FPGA) + Stage 10 (Flash)
-│       ├── motor.c    TODO: Stage 6
-│       └── pid.c      TODO: Stage 8 + 9
+│       ├── main.c     启动流程 + 10ms控制循环
+│       ├── uart.c     ✅ 已完成（阶段1）
+│       ├── adc.c      待实现：阶段2 + 阶段7
+│       ├── encoder.c  待实现：阶段3
+│       ├── i2c.c      待实现：阶段4
+│       ├── spi.c      待实现：阶段6（FPGA通信）+ 阶段10（Flash）
+│       ├── motor.c    待实现：阶段6
+│       └── pid.c      待实现：阶段8 + 阶段9
 │
-├── FPGA/                             ← FPGA logic (Verilog, Xilinx ISE 14.7)
-│   ├── README.md                     ← Pin mapping + ISE setup guide
+├── FPGA/                             ← FPGA逻辑（Verilog，Xilinx ISE 14.7）
+│   ├── README.md                     ← 引脚映射 + ISE操作步骤
 │   └── src/
-│       ├── top.v          Top module — wires spi_slave to pwm_gen
-│       ├── spi_slave.v    SPI slave — receives 16-bit duty value from STM32
-│       └── pwm_gen.v      PWM generator — 20 kHz, duty 0~1000
+│       ├── top.v          顶层模块——连接spi_slave和pwm_gen
+│       ├── spi_slave.v    SPI从机——接收STM32发来的16位占空比值
+│       └── pwm_gen.v      PWM生成器——20kHz，占空比分辨率0~1000
 │
-└── Docs/                             ← Guides and reference
-    ├── 文档资料索引.md                ← Where to download every datasheet
+└── Docs/                             ← 开发指南和参考文档
+    ├── 文档资料索引.md                ← 所有数据手册的下载方式
     ├── 硬件电路说明/
-    │   └── RC低通滤波器.md            ← RC filter circuit for potentiometer ADC
+    │   └── RC低通滤波器.md            ← ADC输入RC滤波电路说明
     ├── 阶段1_UART调试/
-    │   └── 步骤指南.md                ← Complete Stage 1 walkthrough
+    │   └── 步骤指南.md                ← 阶段1完整操作教程
     └── 阶段10_Flash存储/
-        └── 实现要点.md                ← W25Q64 full protocol (important for exam)
+        └── 实现要点.md                ← W25Q64完整协议说明（考试重点）
 ```
 
 ---
 
-## Development Stages
+## 开发阶段
 
-Build one stage at a time. After each stage, use UART to print the value and confirm it is correct before moving on.
+每次只做一个阶段。每个阶段完成后，用UART打印数值确认正确，再进入下一阶段。
 
-| Stage | Goal | Files to edit |
-|-------|------|---------------|
-| **1** | UART works — print "Hello" to PC serial monitor | `uart.c` ✅ |
-| **2** | ADC reads potentiometer — UART prints raw value and RPM | `adc.c` |
-| **3** | Encoder reads motor speed — UART prints RPM | `encoder.c` |
-| **4** | OLED displays a fixed number | `i2c.c` |
-| **5** | FPGA: SPI slave receives value, generates fixed-duty PWM | `spi_slave.v`, `pwm_gen.v` |
-| **6** | STM32 sends PWM duty via SPI → motor spins at one speed | `spi.c`, `motor.c` |
-| **7** | ADC reads INA240 current — UART prints milliamps | `adc.c` |
-| **8** | Speed-only PI loop closes — motor holds target RPM | `pid.c` |
-| **9** | Add current inner loop → full cascade PID working | `pid.c` |
-| **10** | Flash: save PID params, reload after reboot | `spi.c` |
-| **11** | Full integration: OLED live, UART live, everything stable | `main.c` |
+| 阶段 | 目标 | 涉及文件 |
+|------|------|---------|
+| **1** | UART通——在电脑串口助手看到"Hello" | `uart.c` ✅ |
+| **2** | ADC读电位器——UART打印原始值和RPM | `adc.c` |
+| **3** | 编码器读转速——UART打印RPM | `encoder.c` |
+| **4** | OLED显示一个固定数字 | `i2c.c` |
+| **5** | FPGA：SPI从机接收数值，PWM固定占空比输出 | `spi_slave.v`, `pwm_gen.v` |
+| **6** | STM32通过SPI发PWM占空比→电机以固定速度转 | `spi.c`, `motor.c` |
+| **7** | ADC读INA240电流——UART打印毫安值 | `adc.c` |
+| **8** | 单速度PI环闭合——电机保持目标转速 | `pid.c` |
+| **9** | 加入电流内环——串级PID完整运行 | `pid.c` |
+| **10** | Flash：保存PID参数，重启后自动读取 | `spi.c` |
+| **11** | 全部整合：OLED实时显示，UART实时打印，系统稳定 | `main.c` |
