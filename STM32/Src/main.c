@@ -5,7 +5,7 @@
  * STM32F103C8T6，直接寄存器操作，不用HAL库
  *
  * 启动流程：
- *   初始化外设 → 从Flash读取PID参数 → 初始化PID控制器 → 进入主循环
+ *   初始化外设 → 从Flash读取PID参数 → 初始化PID → 电机待机 → 进入主循环
  *
  * Flash存储用途：
  *   启动时读取上次保存的PID参数（Kp/Ki），避免每次上电都用默认值。
@@ -19,6 +19,7 @@
 #include "spi.h"
 #include "i2c.h"
 #include "pid.h"
+#include "motor.h"   /* TB6612方向控制 */
 
 static void delay_ms(int ms) {
     for (int i = 0; i < ms * 8000; i++) {
@@ -33,10 +34,11 @@ int main(void) {
 
     ADC_Init();
     Encoder_Init();
-    SPI_Init();   /* SPI初始化后，Flash（W25Q64）和FPGA均可访问 */
+    SPI_Init();      /* SPI初始化后，Flash（W25Q64）和FPGA均可访问 */
     I2C_Init();
     OLED_Init();
     OLED_Clear();
+    Motor_Init();    /* 配置TB6612的AIN1/AIN2/STBY引脚，初始待机 */
 
     /* ===== 2. 从Flash读取PID参数，初始化PID控制器 =====
      *
@@ -51,10 +53,16 @@ int main(void) {
     float kp_speed, ki_speed, kp_current, ki_current;
     Flash_ReadPIDParams(&kp_speed, &ki_speed, &kp_current, &ki_current);
     PID_InitAll(kp_speed, ki_speed, kp_current, ki_current);
+    UART_SendString("PID loaded from Flash.\r\n");
 
-    UART_SendString("PID loaded from Flash. Entering control loop.\r\n");
+    /* ===== 3. 设置电机方向并使能驱动 =====
+     * 本项目默认正转（电位器控制速度，不控制方向）
+     * PWM=0时电机静止，PWM随PID输出从0逐渐增大
+     */
+    Motor_SetForward();
+    UART_SendString("Motor forward. Entering control loop.\r\n");
 
-    /* ===== 3. 主控制循环 ===== */
+    /* ===== 4. 主控制循环 ===== */
     int loop_counter = 0;
 
     while (1) {
@@ -69,7 +77,7 @@ int main(void) {
         int pwm_duty = CascadePID_Compute(target_speed, actual_speed, actual_current);
 
         /* --- 执行（Actuation） --- */
-        SPI_SendPWMDuty((unsigned short)pwm_duty);   /* 发给FPGA → 生成PWM */
+        SPI_SendPWMDuty((unsigned short)pwm_duty);   /* 发给FPGA → 生成PWM → TB6612 → 电机 */
 
         /* --- 显示，每100ms更新一次OLED --- */
         if (loop_counter % 10 == 0) {
@@ -85,12 +93,7 @@ int main(void) {
 
         /*
          * --- 保存PID参数到Flash（TODO：后期实现触发机制）---
-         *
-         * PID调好后，可通过以下方式触发保存：
-         *   方案A：UART收到"SAVE"命令时保存
-         *   方案B：某个按键按下时保存
-         *
-         * 保存调用：
+         * 调好PID后，可通过以下调用永久保存：
          *   Flash_WritePIDParams(kp_speed, ki_speed, kp_current, ki_current);
          */
 

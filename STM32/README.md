@@ -7,28 +7,37 @@
 
 ## 引脚分配规划
 
-| 功能           | 外设      | STM32 引脚        | 连接目标                  |
-|----------------|-----------|-------------------|---------------------------|
-| 电位器采样     | ADC1_CH1  | PA1               | 电位器中间脚（经RC滤波）  |
-| 电流采样       | ADC1_CH2  | PA2               | INA240 输出               |
-| 编码器A相      | TIM2_CH1  | PA0               | 电机编码器A               |
-| 编码器B相      | TIM2_CH2  | PA1               | 电机编码器B               |
-| SPI to FPGA    | SPI1      | PA5(CLK) PA7(MOSI) PA4(NSS) | FPGA SPI从机  |
-| SPI to Flash   | SPI1      | 共用CLK/MOSI，PB0(NSS) | W25Q64              |
-| OLED I2C       | I2C1      | PB6(SCL) PB7(SDA) | OLED SSD1306              |
-| UART 调试      | USART1    | PA9(TX) PA10(RX)  | USB-TTL CH340             |
+| 功能              | 外设      | STM32 引脚               | 连接目标                    |
+|-------------------|-----------|--------------------------|------------------------------|
+| 电位器采样        | ADC1_CH3  | PA3                      | 电位器中间脚（经RC滤波）    |
+| 电流采样          | ADC1_CH2  | PA2                      | INA240 输出                 |
+| 编码器A相         | TIM2_CH1  | PA0                      | 电机编码器A                 |
+| 编码器B相         | TIM2_CH2  | PA1                      | 电机编码器B                 |
+| SPI 时钟          | SPI1_SCK  | PA5                      | FPGA + W25Q64（共享）       |
+| SPI 主发从收      | SPI1_MOSI | PA7                      | FPGA + W25Q64（共享）       |
+| SPI 主收从发      | SPI1_MISO | PA6                      | FPGA + W25Q64（共享）       |
+| SPI 片选 FPGA     | GPIO      | PA4                      | FPGA SS引脚                 |
+| SPI 片选 Flash    | GPIO      | PB0                      | W25Q64 CS引脚               |
+| OLED I2C 时钟     | I2C1_SCL  | PB6                      | OLED SSD1306                |
+| OLED I2C 数据     | I2C1_SDA  | PB7                      | OLED SSD1306                |
+| UART 发送         | USART1_TX | PA9                      | CH340 RXD                   |
+| UART 接收         | USART1_RX | PA10                     | CH340 TXD                   |
+| 电机使能（STBY）  | GPIO      | PB1                      | TB6612 STBY                 |
+| 电机方向 AIN1     | GPIO      | PB10                     | TB6612 AIN1                 |
+| 电机方向 AIN2     | GPIO      | PB11                     | TB6612 AIN2                 |
 
-> 注意：PA0和PA1被TIM2编码器占用后，电位器需换到其他ADC通道（如PA3）。
-> 最终引脚分配需根据实际焊接情况确认。
+> **PA0/PA1 已被 TIM2 编码器占用**，电位器改接 PA3（ADC1 通道3）。
+> FPGA 输出 PWM → TB6612 PWMA（不经过STM32）。
 
 ---
 
 ## 模块说明
 
-- **adc.c/h** — 配置ADC1，读取电位器电压（通道1）和电流信号（通道2）
-- **encoder.c/h** — 配置TIM2为编码器模式，定时读取计数值换算转速(RPM)
-- **spi.c/h** — 配置SPI1为主机模式，发送PWM占空比给FPGA，读写W25Q64 Flash
-- **i2c.c/h** — 配置I2C1，驱动OLED SSD1306显示目标速度和实际速度
-- **uart.c/h** — 配置USART1，printf重定向，打印PID调试信息
-- **pid.c/h** — 串级PID：外环（速度环）+ 内环（电流环）
-- **main.c** — 初始化所有外设，主循环协调各模块
+- **uart.c/h** — USART1寄存器配置，串口调试输出（阶段1，已完成）
+- **adc.c/h** — ADC1配置，读取电位器（PA3）和电流（PA2），含软件滑动平均滤波
+- **encoder.c/h** — TIM2编码器模式，读取脉冲计数换算RPM
+- **spi.c/h** — SPI1主机，发PWM占空比给FPGA；手写W25Q64 Flash读写协议
+- **i2c.c/h** — I2C1配置，驱动OLED SSD1306显示目标/实际转速
+- **motor.c/h** — TB6612 AIN1/AIN2/STBY GPIO控制（方向和使能，PWM由FPGA控制）
+- **pid.c/h** — 串级PI：外环（速度环）→ 内环（电流环）→ PWM占空比
+- **main.c** — 启动序列 + 主控制循环（10ms周期）
