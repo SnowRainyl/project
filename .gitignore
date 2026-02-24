@@ -1,0 +1,20 @@
+# Claude Code 本地记忆文件（不需要提交到仓库）
+.claude/
+
+# macOS 系统文件
+.DS_Store
+
+# Keil MDK 编译产物
+STM32/*.uvoptx
+STM32/*.uvguix
+STM32/Objects/
+STM32/Listings/
+STM32/*.map
+STM32/*.htm
+
+# Xilinx ISE 编译产物
+FPGA/ise/
+FPGA/*.xise
+FPGA/*.gise
+FPGA/xst/
+FPGA/xlnx_auto_0_xdb/
