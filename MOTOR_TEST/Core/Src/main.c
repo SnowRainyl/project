@@ -22,9 +22,12 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdio.h>
 #include "uart.h"
 #include "custom_i2c.h"  /* I2C + OLED 显示接口 */
 #include "OLED_SSD1306.h"
+#include "spi_Reg.h"
+#include "w25q64.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,7 +59,16 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-char CHAR[100] = "JHH";
+static char uart_buf[128];
+
+/* Flash 测试结果，可在 Watch 窗口直接观察 */
+uint16_t flash_id    = 0;
+uint8_t  flash_id_ok = 0;   /* 1 = ID 正确 (0xEF16) */
+
+static const float write_data[4] = {3.1415f, -2.718f, 100.5f, 0.001f};
+static float       read_data[4]  = {0.0f, 0.0f, 0.0f, 0.0f};
+
+#define FLASH_TEST_ADDR   0x001000UL   /* 测试扇区：第2扇区，避免影响扇区0 */
 /* USER CODE END 0 */
 
 /**
@@ -77,6 +89,7 @@ int main(void)
 
   /* USER CODE BEGIN Init */
 	UART_Init();
+	SPI1_Flash_Init();
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -95,6 +108,42 @@ int main(void)
   OLED_Init();
   OLED_ShowChar(0, 0, 'A', FontSize8x16, 1);
   OLED_ShowStr(0, 2, (uint8_t *)"yuqitest", FontSize6x8, 0);
+
+  /* ============================================================
+   * W25Q64FV Flash 测试
+   * ============================================================ */
+
+  /* Step 1: 读 ID，验证 SPI 通信是否正常 */
+  flash_id = W25Q64_ReadID();
+  if (flash_id == 0xEF16) {
+      flash_id_ok = 1;
+      UART_SendString("[Flash] ID OK: 0xEF16\r\n");
+  } else {
+      flash_id_ok = 0;
+      snprintf(uart_buf, sizeof(uart_buf), "[Flash] ID FAIL: 0x%04X (expected 0xEF16)\r\n", flash_id);
+      UART_SendString(uart_buf);
+  }
+
+  /* Step 2: 解除写保护（SR1=0x00, SR2=0x00） */
+  W25Q64_Unprotect();
+  UART_SendString("[Flash] Unprotect done\r\n");
+
+  /* Step 3: 擦除测试扇区（4KB @ 0x001000），tSE max 400ms */
+  W25Q64_Erase_Sector(FLASH_TEST_ADDR);
+  UART_SendString("[Flash] Erase done\r\n");
+
+  /* Step 4: 写入4个float */
+  W25Q64_Write_4Floats(FLASH_TEST_ADDR, (float *)write_data);
+  UART_SendString("[Flash] Write done\r\n");
+
+  /* Step 5: 读回并通过 UART 打印 */
+  W25Q64_Read_4Floats(FLASH_TEST_ADDR, read_data);
+  snprintf(uart_buf, sizeof(uart_buf),
+           "[Flash] Read: %.4f  %.4f  %.4f  %.4f\r\n",
+           (double)read_data[0], (double)read_data[1],
+           (double)read_data[2], (double)read_data[3]);
+  UART_SendString(uart_buf);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -104,9 +153,11 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-		
-		UART_SendString(CHAR);
-		HAL_Delay(100);
+    flash_id = W25Q64_ReadID();
+    snprintf(uart_buf, sizeof(uart_buf), "flash_id=0x%04X id_ok=%d\r\n",
+             flash_id, flash_id_ok);
+    UART_SendString(uart_buf);
+    HAL_Delay(1000);
   }
   /* USER CODE END 3 */
 }
