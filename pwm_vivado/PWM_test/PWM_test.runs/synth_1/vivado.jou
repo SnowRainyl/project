@@ -1,0 +1,14 @@
+#-----------------------------------------------------------
+# Vivado v2023.1 (64-bit)
+# SW Build 3865809 on Sun May  7 15:05:29 MDT 2023
+# IP Build 3864474 on Sun May  7 20:36:21 MDT 2023
+# SharedData Build 3865790 on Sun May 07 13:33:03 MDT 2023
+# Start of session at: Sat Mar  7 14:37:42 2026
+# Process ID: 51380
+# Current directory: D:/05studyplace/02 electronic system/project/pwm_vivado/PWM_test/PWM_test.runs/synth_1
+# Command line: vivado.exe -log simple_pwm.vds -product Vivado -mode batch -messageDb vivado.pb -notrace -source simple_pwm.tcl
+# Log file: D:/05studyplace/02 electronic system/project/pwm_vivado/PWM_test/PWM_test.runs/synth_1/simple_pwm.vds
+# Journal file: D:/05studyplace/02 electronic system/project/pwm_vivado/PWM_test/PWM_test.runs/synth_1\vivado.jou
+# Running On: LAPTOP-0B6E8IB7, OS: Windows, CPU Frequency: 4292 MHz, CPU Physical cores: 12, Host memory: 16312 MB
+#-----------------------------------------------------------
+source simple_pwm.tcl -notrace

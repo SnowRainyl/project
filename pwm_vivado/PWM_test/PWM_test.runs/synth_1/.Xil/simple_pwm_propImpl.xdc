@@ -1,0 +1,5 @@
+set_property SRC_FILE_INFO {cfile:{D:/05studyplace/02 electronic system/project/pwm_vivado/PWM_test/PWM_test.srcs/constrs_1/new/pwm.xdc} rfile:../../../PWM_test.srcs/constrs_1/new/pwm.xdc id:1} [current_design]
+set_property src_info {type:XDC file:1 line:3 export:INPUT save:INPUT read:READ} [current_design]
+set_property PACKAGE_PIN N20 [get_ports pwm_out]
+set_property src_info {type:XDC file:1 line:4 export:INPUT save:INPUT read:READ} [current_design]
+set_property PACKAGE_PIN K17 [get_ports clk]
