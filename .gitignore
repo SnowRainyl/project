@@ -1,0 +1,29 @@
+# Keil MDK 编译产物
+KELI_MOTOR/MOTOR_TEST/MDK-ARM/MOTOR_TEST/
+KELI_MOTOR/MOTOR_TEST/MDK-ARM/*.uvguix.*
+KELI_MOTOR/MOTOR_TEST/MDK-ARM/*.scvd
+*.o
+*.d
+*.axf
+*.map
+*.htm
+*.lnp
+*.dep
+*.bak
+*.lst
+*.crf
+*.iex
+
+# ISE 编译产物
+KELI_MOTOR/pwm_vivado/pwm_vivado/PWM_test/PWM_test.runs/
+KELI_MOTOR/pwm_vivado/pwm_vivado/PWM_test/PWM_test.cache/
+KELI_MOTOR/pwm_vivado/pwm_vivado/PWM_test/PWM_test.ip_user_files/
+*.bit
+*.mcs
+*.prm
+xsim.dir/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini

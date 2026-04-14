@@ -1,0 +1,20 @@
+#-----------------------------------------------------------
+# Vivado v2023.1 (64-bit)
+# SW Build 3865809 on Sun May  7 15:05:29 MDT 2023
+# IP Build 3864474 on Sun May  7 20:36:21 MDT 2023
+# SharedData Build 3865790 on Sun May 07 13:33:03 MDT 2023
+# Start of session at: Sat Mar 14 21:11:21 2026
+# Process ID: 18600
+# Current directory: C:/Users/yy/Desktop/KELI_MOTOR/pwm_vivado/pwm_vivado/PWM_test
+# Command line: vivado.exe -gui_launcher_event rodinguilauncherevent21092 C:\Users\yy\Desktop\KELI_MOTOR\pwm_vivado\pwm_vivado\PWM_test\PWM_test.xpr
+# Log file: C:/Users/yy/Desktop/KELI_MOTOR/pwm_vivado/pwm_vivado/PWM_test/vivado.log
+# Journal file: C:/Users/yy/Desktop/KELI_MOTOR/pwm_vivado/pwm_vivado/PWM_test\vivado.jou
+# Running On: DESKTOP-0FVCC64, OS: Windows, CPU Frequency: 2904 MHz, CPU Physical cores: 6, Host memory: 16989 MB
+#-----------------------------------------------------------
+start_gui
+open_project C:/Users/yy/Desktop/KELI_MOTOR/pwm_vivado/pwm_vivado/PWM_test/PWM_test.xpr
+update_compile_order -fileset sources_1
+open_hw_manager
+connect_hw_server -allow_non_jtag
+connect_hw_server -allow_non_jtag
+connect_hw_server -allow_non_jtag
