@@ -1,23 +1,26 @@
 /*
  * uart.c — UART串口调试模块实现
  *
- * 硬件：STM32F407G-DISC1（板载ST-Link/V2-A，支持虚拟串口）
+ * 硬件：STM32F407G-DISC1
  *
- * 硬件连接：
- *   只需一根 Mini-USB 线接到板子左上角的 ST-Link USB 口（CN1）
- *   无需CH340，无需杜邦线
+ * !! 重要：板载 ST-Link VCP 已确认无效（实测 USART2 寄存器配置正确、PA2 输出正常，
+ *    但 COM6 收不到任何数据；HAL 与寄存器代码均试过；疑似 ST-Link 内部 UART 子模
+ *    块损坏）。项目改用外部 CH340G USB-TTL 模块。
+ *    详见硬件接线与调试记录.md "六-2、串口调试（CH340 模块）" 章节。
  *
- *   ST-Link内部已将以下引脚连接到虚拟COM口：
- *   STM32 PA2 (USART2_TX) → ST-Link → 电脑虚拟COM口
- *   STM32 PA3 (USART2_RX) → ST-Link → 电脑虚拟COM口
+ * 硬件连接（CH340 ↔ STM32，TX/RX 必须交叉）：
+ *   CH340 TXD → STM32 PA3 (USART2_RX)
+ *   CH340 RXD → STM32 PA2 (USART2_TX)
+ *   CH340 GND → STM32 GND（必须共地）
+ *   CH340 VCC → 不接（STM32 自有供电，避免冲突）
  *
- * 电脑端：串口助手（SSCOM等），波特率 115200，8N1
- *   COM口号：设备管理器中 "STMicroelectronics Virtual COM Port (COMx)"
+ * 电脑端：串口助手 / PuTTY，波特率 115200，8N1，无流控
+ *   COM 口：设备管理器中找 "USB-SERIAL CH340 (COMxx)"，不是 ST-Link 那个 COM
  *
  * 时钟说明：
- *   F407上电默认使用内部时钟 HSI = 16MHz（不同于F103的8MHz）
- *   USART2 挂在 APB1 总线，默认 APB1 = 16MHz
- *   若后续系统升级到168MHz（APB1=42MHz），把 USART2->BRR 改为 0x16D 即可
+ *   系统时钟：HSI 16MHz × PLL → 168MHz，APB1 = 42MHz
+ *   USART2 挂在 APB1，BRR = 42MHz / (16 × 115200) → 0x16D
+ *   若回退到 HSI（APB1=16MHz），改为 USART2->BRR = 0x8B
  *
  * 参考：RM0090 第30章（USART）
  */
