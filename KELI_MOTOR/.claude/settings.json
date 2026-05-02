@@ -6,7 +6,10 @@
       "Bash(cp \"d:/05studyplace/02 electronic system/project/最新版project/KELI_MOTOR/KELI_MOTOR/MOTOR_TEST/top.vhd\" \"d:/05studyplace/PROJECT/ISE/top.vhd\")",
       "Read(//d/05studyplace/PROJECT/ISE/**)",
       "Read(//d/05studyplace/02 electronic system/project/最新版project/KELI_MOTOR/**)",
-      "Bash(ssh -T git@github.com)"
+      "Bash(ssh -T git@github.com)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }
