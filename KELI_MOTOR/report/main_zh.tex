@@ -359,12 +359,62 @@ INA240A2（增益 = 50\,V/V）检测 0.1\,$\Omega$ 采样电阻两端的压差�
 
 \subsection{UART — 串口调试（USART2）}
 
-USART2 配置为 115200\,baud，8N1 格式。APB1 = 42\,MHz 时，波特率寄存器计算如下：
+\subsubsection*{开发查找逻辑}
+
+寄存器级外设开发的查阅过程并非"直接找引脚"，而是遵循固定的两步路径，以 USART2 为例说明如下。
+
+\textbf{第一步：查 RM0090（知道配什么）}
+
+打开 RM0090 第 30 章 USART，可得知使用 USART2 需要完成四件事：
+\begin{enumerate}
+    \item 使能 USART2 时钟（\texttt{RCC->APB1ENR} bit17）及 GPIO 时钟（\texttt{RCC->AHB1ENR} bit0）
+    \item 将对应引脚配置为复用功能（AF）模式，选择 USART2 对应的 AF 编号
+    \item 向 BRR 寄存器写入波特率分频值
+    \item 设置 CR1 寄存器使能发送（TE）、接收（RE）与 USART 总开关（UE）
+\end{enumerate}
+
+RM0090 到此为止。但第 2 步存在一个信息缺口：\textbf{RM 只告诉你"需要配 AF 模式"，但不说明 USART2 对应 AF 几、应选哪个物理引脚}。这是 RM 与 Datasheet 职责的分界点。
+
+\textbf{第二步：查 DS8626 Table 9（知道用哪个引脚）}
+
+DS8626 的 Table 9 是 STM32F407 全部引脚的复用功能对照表，按外设名检索 ``USART2'' 可得：
+
+\begin{center}
+\begin{tabular}{lll}
+    \toprule
+    \textbf{引脚} & \textbf{AF 编号} & \textbf{功能} \\
+    \midrule
+    PA2 & AF7 & USART2\_TX \\
+    PA3 & AF7 & USART2\_RX \\
+    PD5 & AF7 & USART2\_TX（备选） \\
+    PD6 & AF7 & USART2\_RX（备选） \\
+    \bottomrule
+\end{tabular}
+\end{center}
+
+本项目选用 PA2/PA3，因为这两个引脚在 STM32F407G-DISC1 开发板上已通过板内走线连接至 ST-Link 芯片（虽然该 VCP 链路最终确认失效）。AF 编号 7 即为写入 \texttt{GPIOA->AFR[0]} 寄存器的数值。
+
+\textbf{查阅逻辑总结：}
+\[
+\text{RM0090（配什么寄存器）}
+\xrightarrow{\text{AF编号缺口}}
+\text{DS8626 Table 9（用哪个引脚、AF 几）}
+\xrightarrow{}
+\text{回 RM0090 写寄存器}
+\]
+
+入口永远是 RM0090，DS8626 仅在需要引脚/AF 信息时介入，其余步骤全部在 RM 内完成。
+
+\subsubsection*{寄存器配置}
+
+USART2 配置为 115200\,baud，8N1 格式。引脚 PA2（TX）、PA3（RX）配置为 AF7，推挽输出，无上下拉。APB1 = 42\,MHz 时，波特率寄存器计算如下：
 \begin{equation}
-    \text{BRR} = \frac{42{,}000{,}000}{16 \times 115{,}200} \approx 22.786
-    \quad\Rightarrow\quad \texttt{0x16D}
+    \text{USARTDIV} = \frac{f_{\text{APB1}}}{16 \times \text{BaudRate}}
+    = \frac{42{,}000{,}000}{16 \times 115{,}200} \approx 22.786
+    \quad\Rightarrow\quad \texttt{BRR = 0x16D}
 \end{equation}
-本开发板 ST-Link VCP 链路异常无法输出数据，改用外接 CH340G USB 转串口模块（PA2/PA3，COM12）。
+
+发送函数等待 SR 寄存器 TXE 标志位（bit7）置 1 后再向 DR 寄存器写入数据，确保不覆盖尚未发完的字节。本开发板 ST-Link VCP 链路异常无法输出数据，改用外接 CH340G USB 转串口模块（PA2 $\to$ CH340G RXD，PA3 $\leftarrow$ CH340G TXD，TX/RX 交叉连接，共地，COM12，115200\,baud 8N1）。
 
 \subsection{ADC — 双通道采样}
 
