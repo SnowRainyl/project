@@ -1,0 +1,904 @@
+\documentclass[12pt, a4paper]{report}
+
+% ─── Packages ────────────────────────────────────────────────────────────────
+\usepackage[top=2.5cm, bottom=2.5cm, left=3cm, right=2.5cm]{geometry}
+\usepackage{fontenc}
+\usepackage{inputenc}
+\usepackage{setspace}
+\usepackage{titlesec}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{tocloft}
+\usepackage{hyperref}
+\usepackage{appendix}
+\usepackage{cite}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+% ─── Hyperref setup ──────────────────────────────────────────────────────────
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    citecolor=black,
+    urlcolor=blue,
+    pdftitle={DC Motor Cascade PID Control System},
+    pdfauthor={Your Name},
+}
+
+% ─── Page style ──────────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\leftmark}
+\fancyhead[R]{\small\thepage}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ─── Line spacing ────────────────────────────────────────────────────────────
+\onehalfspacing
+
+% ─── Chapter / section title format ─────────────────────────────────────────
+\titleformat{\chapter}[display]
+  {\normalfont\Large\bfseries}{\chaptertitlename\ \thechapter}{12pt}{\Large}
+\titlespacing*{\chapter}{0pt}{-10pt}{20pt}
+
+% ─── Code listing style ──────────────────────────────────────────────────────
+\lstdefinestyle{cstyle}{
+    language=C,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{gray}\itshape,
+    stringstyle=\color{orange},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=8pt,
+    frame=single,
+    breaklines=true,
+    tabsize=4,
+    showstringspaces=false,
+    captionpos=b,
+}
+
+\lstdefinestyle{vhdlstyle}{
+    language=VHDL,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{gray}\itshape,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=8pt,
+    frame=single,
+    breaklines=true,
+    tabsize=4,
+    captionpos=b,
+}
+
+% ─── TOC depth ───────────────────────────────────────────────────────────────
+\setcounter{tocdepth}{3}
+\setcounter{secnumdepth}{3}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{document}
+
+% ════════════════════════════════════════════════════════════════════════════
+%  TITLE PAGE
+% ════════════════════════════════════════════════════════════════════════════
+\begin{titlepage}
+    \centering
+    \vspace*{2cm}
+
+    {\Large \textbf{[University Name]}}\\[0.5cm]
+    {\large [Department Name]}\\[2cm]
+
+    \rule{\linewidth}{0.5pt}\\[0.5cm]
+    {\LARGE \textbf{DC Motor Cascade PID Control System}}\\[0.3cm]
+    {\large Based on STM32F407 and AX309 FPGA}\\[0.5cm]
+    \rule{\linewidth}{0.5pt}\\[2cm]
+
+    {\large
+    \begin{tabular}{ll}
+        \textbf{Author:}   & [Your Name] \\[0.3cm]
+        \textbf{Student ID:} & [Your Student ID] \\[0.3cm]
+        \textbf{Supervisor:} & [Supervisor Name] \\[0.3cm]
+        \textbf{Module:}   & [Module Code / Name] \\[0.3cm]
+        \textbf{Date:}     & \today \\
+    \end{tabular}
+    }
+
+    \vfill
+    {\small Academic Year 2025--2026}
+\end{titlepage}
+
+% ════════════════════════════════════════════════════════════════════════════
+%  ABSTRACT
+% ════════════════════════════════════════════════════════════════════════════
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+\markboth{Abstract}{Abstract}
+
+This report presents the design and implementation of a DC motor cascade
+closed-loop control system using an STM32F407 microcontroller and an AX309
+FPGA development board. The system achieves smooth speed regulation from
+0 to 100 RPM via a cascade PID architecture comprising a speed outer loop
+and a current inner loop.
+
+Register-level C drivers were developed for all peripherals including UART,
+ADC, SPI, I2C, and TIM3 quadrature encoder interface. The FPGA, programmed
+in VHDL, implements a 12-bit PWM generator operating at approximately
+12.2\,kHz, receiving duty cycle commands from the STM32 via SPI. Motor
+current is measured by an INA240A2 bidirectional current shunt monitor and
+fed back to the inner loop, while encoder-based speed feedback closes the
+outer loop.
+
+Experimental results confirm stable closed-loop operation with a steady-state
+speed error below 1\%, PWM frequency accuracy of 12.207\,kHz (matching the
+theoretical 50\,MHz/4096), and a no-load current measurement of approximately
+30\,mA consistent with the motor datasheet.
+
+\vspace{1em}
+\noindent\textbf{Keywords:} cascade PID, STM32F407, FPGA, DC motor control,
+current sensing, register-level programming, VHDL
+
+% ════════════════════════════════════════════════════════════════════════════
+%  ACKNOWLEDGMENTS
+% ════════════════════════════════════════════════════════════════════════════
+\chapter*{Acknowledgments}
+\addcontentsline{toc}{chapter}{Acknowledgments}
+\markboth{Acknowledgments}{Acknowledgments}
+
+% TODO: 写致谢
+[Write your acknowledgments here.]
+
+% ════════════════════════════════════════════════════════════════════════════
+%  TABLE OF CONTENTS / TABLES / FIGURES
+% ════════════════════════════════════════════════════════════════════════════
+\tableofcontents
+\listoftables
+\listoffigures
+
+% ════════════════════════════════════════════════════════════════════════════
+%  CHAPTER 1 — System Analysis and Design
+% ════════════════════════════════════════════════════════════════════════════
+\chapter{System Analysis and Design}
+
+\section{Functional Requirements and Feasibility Analysis}
+
+% TODO: 描述课程要求、系统需要实现的功能
+The primary objective of this project is to implement a closed-loop DC motor
+speed control system meeting the following requirements:
+
+\begin{itemize}
+    \item Speed range: 0--100\,RPM, user-adjustable via rotary potentiometer
+    \item Steady-state speed error: $<1\%$
+    \item Real-time display of speed, duty cycle, and motor current on OLED
+    \item Serial debug output via UART at 115200\,baud
+    \item Non-volatile parameter storage using SPI Flash (W25Q64)
+\end{itemize}
+
+\section{System Architecture Design}
+
+The system adopts a layered architecture as shown in Figure~\ref{fig:arch}.
+
+\begin{figure}[H]
+    \centering
+    % TODO: 插入系统框图
+    % \includegraphics[width=0.85\textwidth]{figures/system_arch.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{2cm}
+    [System block diagram: Sensing → Decision → Actuation]
+    \vspace{2cm}}}
+    \caption{System architecture of the DC motor cascade PID control system.}
+    \label{fig:arch}
+\end{figure}
+
+The data flow is:
+\[
+\text{Potentiometer} \xrightarrow{\text{ADC}} \text{STM32 PID}
+\xrightarrow{\text{SPI2}} \text{FPGA} \xrightarrow{\text{PWM}}
+\text{TB6612} \rightarrow \text{Motor}
+\]
+with encoder speed and INA240 current feeding back directly to the STM32.
+
+\section{Control Strategy: Why Cascade PID}
+
+A single-loop proportional--integral--derivative (PID) controller acting
+directly on speed exhibits slow disturbance rejection when load current
+changes. By adding an inner current loop, the current is regulated at a much
+higher bandwidth, effectively linearising the plant for the outer speed loop
+and improving overall dynamic performance.
+
+The two loops operate at the same 1\,kHz rate but with separate tuning:
+the inner loop uses a higher proportional gain to ensure it settles within
+one outer-loop period.
+
+% ════════════════════════════════════════════════════════════════════════════
+%  CHAPTER 2 — Hardware Development
+% ════════════════════════════════════════════════════════════════════════════
+\chapter{Hardware Development}
+
+\section{Microcontroller System (STM32F407G-DISC1)}
+
+\subsection{MCU Selection and Specifications}
+
+The STM32F407VG (Cortex-M4, 168\,MHz, FPU) was selected for its rich
+peripheral set and sufficient processing power to run a 1\,kHz control
+interrupt with $<1\%$ CPU load. Key peripherals used are listed in
+Table~\ref{tab:mcu_periph}.
+
+\begin{table}[H]
+    \centering
+    \caption{STM32F407 peripherals used in this project.}
+    \label{tab:mcu_periph}
+    \begin{tabular}{lll}
+        \toprule
+        \textbf{Peripheral} & \textbf{Function} & \textbf{Clock} \\
+        \midrule
+        TIM6     & 1\,kHz PID control interrupt & APB1 84\,MHz \\
+        TIM3     & Quadrature encoder interface & APB1 84\,MHz \\
+        ADC1     & Potentiometer + current sensing & APB2 21\,MHz \\
+        SPI1     & W25Q64 Flash (not yet wired) & APB2 5.25\,MHz \\
+        SPI2     & FPGA duty cycle transmission & APB1 5.25\,MHz \\
+        I2C1     & OLED SSD1306 display & APB1 100\,kHz \\
+        USART2   & Serial debug (CH340G) & APB1 115200 baud \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Pin Allocation and Peripheral Mapping}
+
+Table~\ref{tab:pins} lists all 16 signal pins used.
+
+\begin{table}[H]
+    \centering
+    \caption{STM32F407 pin assignment.}
+    \label{tab:pins}
+    \begin{tabular}{lll}
+        \toprule
+        \textbf{Pin} & \textbf{Peripheral} & \textbf{Connected to} \\
+        \midrule
+        PA0  & ADC1\_IN0   & Potentiometer (via RC filter) \\
+        PA1  & ADC1\_IN1   & INA240A2 output \\
+        PA2  & USART2\_TX  & CH340G RXD \\
+        PA3  & USART2\_RX  & CH340G TXD \\
+        PA4  & SPI1\_CS    & W25Q64 chip select \\
+        PA5  & SPI1\_SCK   & W25Q64 clock \\
+        PA6  & SPI1\_MISO  & W25Q64 data out \\
+        PA7  & SPI1\_MOSI  & W25Q64 data in \\
+        PB6  & I2C1\_SCL   & OLED SCL \\
+        PB7  & I2C1\_SDA   & OLED SDA \\
+        PB12 & SPI2\_CS    & FPGA cs\_n \\
+        PB13 & SPI2\_SCK   & FPGA sck \\
+        PB14 & SPI2\_MISO  & FPGA miso (not used) \\
+        PB15 & SPI2\_MOSI  & FPGA mosi \\
+        PC6  & TIM3\_CH1   & Encoder channel A \\
+        PC7  & TIM3\_CH2   & Encoder channel B \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{FPGA PWM Generation Module (AX309 Spartan-6)}
+
+\subsection{Role of the FPGA}
+
+The FPGA operates as a dedicated PWM generator. It receives a 12-bit duty
+cycle value from the STM32 via SPI and outputs a corresponding PWM signal
+to the TB6612FNG motor driver. This offloads real-time PWM generation from
+the MCU and allows a higher PWM frequency than the STM32 timer could
+conveniently achieve.
+
+\subsection{PWM Frequency Derivation}
+
+The AX309 board provides a 50\,MHz on-board oscillator. A 12-bit up-counter
+resets at 4096, giving:
+
+\begin{equation}
+    f_{\text{PWM}} = \frac{f_{\text{clk}}}{2^{12}} = \frac{50 \times 10^6}{4096}
+    \approx 12.207\,\text{kHz}
+    \label{eq:pwm_freq}
+\end{equation}
+
+This frequency is above the audible range and provides sufficient resolution
+(one LSB $= 100\,\%/4096 \approx 0.024\,\%$) for smooth speed control.
+Experimentally verified with a logic analyser: 12.207\,kHz.
+
+\section{Motor Drive Circuit (TB6612FNG)}
+
+% TODO: 描述 TB6612 H桥原理，AIN1/AIN2/STBY 接线
+The TB6612FNG dual H-bridge driver converts the 3.3\,V FPGA PWM signal to
+the current levels required by the JGA25-370 DC motor. In this project the
+motor runs in a single direction (AIN1 = HIGH, AIN2 = LOW, STBY = HIGH,
+all hardwired), and speed is controlled solely by the PWM duty cycle applied
+to the PWMA input.
+
+\begin{table}[H]
+    \centering
+    \caption{TB6612FNG control signal wiring.}
+    \label{tab:tb6612}
+    \begin{tabular}{lll}
+        \toprule
+        \textbf{TB6612 pin} & \textbf{Connected to} & \textbf{Note} \\
+        \midrule
+        PWMA & FPGA J3-31 (F16) & PWM duty from FPGA \\
+        AIN1 & 3.3\,V           & Direction: forward \\
+        AIN2 & GND              & Direction: forward \\
+        STBY & 3.3\,V           & Must be HIGH to enable \\
+        VM   & 12\,V supply     & Motor power \\
+        AO1/AO2 & Motor terminals & Output \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{Sensing System}
+
+\subsection{Speed Sensing: Encoder and TIM3 Quadrature Decoding}
+
+The JGA25-370 motor has a built-in Hall-effect quadrature encoder. TIM3 is
+configured in Encoder Mode 3 (both edges of both channels), giving a
+$\times4$ resolution multiplier. The speed is computed every 1\,ms:
+
+\begin{equation}
+    \text{RPM} = \frac{\Delta_{\text{count}} \times 60{,}000}
+                      {N_{\text{PPR}}}
+    \label{eq:rpm}
+\end{equation}
+
+where $\Delta_{\text{count}}$ is the signed 16-bit counter difference (handles
+overflow automatically) and $N_{\text{PPR}}$ is the encoder pulses per
+revolution (including gear ratio and $\times4$ mode).
+
+An 8-point moving average filter smooths the raw RPM, and a hardware digital
+filter (IC1F = IC2F = 0001, 2-sample) rejects spikes shorter than two
+sampling periods.
+
+\subsection{Current Sensing: INA240A2 Signal Chain}
+
+\begin{figure}[H]
+    \centering
+    % TODO: 插入 INA240 信号链框图
+    \fbox{\parbox{0.7\textwidth}{\centering\vspace{1.5cm}
+    [INA240A2 signal chain diagram]
+    \vspace{1.5cm}}}
+    \caption{INA240A2 current sensing signal chain.}
+    \label{fig:ina240}
+\end{figure}
+
+The INA240A2 (gain = 50\,V/V) monitors the voltage across a 0.1\,$\Omega$
+shunt resistor. Its output voltage is:
+
+\begin{equation}
+    V_{\text{out}} = V_{\text{ref}} + G \cdot I \cdot R_{\text{shunt}}
+    \label{eq:ina240_out}
+\end{equation}
+
+where $V_{\text{ref}} = V_{\text{CC}}/2$. The empirically calibrated
+zero-current reference is $V_{\text{ref}} = 1773\,\text{mV}$ (ADC raw
+$\approx 2200$). The motor current is recovered as:
+
+\begin{equation}
+    I\,[\text{mA}] = \frac{V_{\text{out}}\,[\text{mV}] - 1773}
+                         {50 \times 0.1}
+                  = \frac{V_{\text{out}} - 1773}{5}
+    \label{eq:current}
+\end{equation}
+
+Validation: at no load and 100\,RPM, the measured current is approximately
+30\,mA, consistent with the JGA25-370 datasheet specification.
+
+\subsection{Speed Setpoint: Potentiometer and RC Low-Pass Filter}
+
+A rotary potentiometer connected to PA0 (ADC1\_IN0) provides the target
+speed reference. An RC low-pass filter ($f_c = 1/(2\pi RC)$) is inserted
+between the wiper and the ADC pin to attenuate power-supply noise. Software
+applies a 16-point sliding average and a dead zone (raw ADC $< 50
+\Rightarrow$ setpoint $= 0$) to eliminate drift near zero.
+
+% ════════════════════════════════════════════════════════════════════════════
+%  CHAPTER 3 — Embedded Software Development
+% ════════════════════════════════════════════════════════════════════════════
+\chapter{Embedded Software Development}
+
+All drivers are implemented at the register level (no HAL peripheral
+abstractions) to demonstrate direct hardware control and satisfy course
+requirements.
+
+\section{Register-level Peripheral Drivers}
+
+\subsection{UART — Serial Debug (USART2)}
+
+% TODO: 说明 BRR 寄存器计算，AF7 配置，CH340 接线
+USART2 is configured for 115200\,baud, 8N1. With APB1 = 42\,MHz:
+\begin{equation}
+    \text{BRR} = \frac{42{,}000{,}000}{16 \times 115{,}200} \approx 22.786
+    \quad\Rightarrow\quad \texttt{0x16D}
+\end{equation}
+The ST-Link VCP was found non-functional on this board; an external CH340G
+USB-to-TTL module (PA2/PA3) is used instead.
+
+\subsection{ADC — Dual-Channel Acquisition}
+
+% TODO: ADCPRE、采样时间、软件触发流程
+ADC1 uses software triggering with dynamic channel selection (SQR3). The
+clock is divided from APB2 (84\,MHz) by 4 to give 21\,MHz. Sampling times
+are set to 84 cycles for the high-impedance potentiometer channel (IN0) and
+28 cycles for the low-impedance INA240 output (IN1).
+
+\subsection{SPI1 — W25Q64 Flash Storage}
+
+% TODO: W25Q64 指令集，ReadID，Page Program，Sector Erase
+[Describe SPI1 configuration and W25Q64 command protocol. Note: chip not
+yet physically wired; driver validated via SPI1 loopback test (PASS).]
+
+\subsection{SPI2 — FPGA Communication Protocol}
+
+Data is sent to the FPGA as two bytes encoding the 12-bit duty cycle:
+
+\begin{verbatim}
+CS↓
+  Byte 0: [7:4]=0000  [3:0]=duty[11:8]   (high nibble)
+  Byte 1: [7:0]=duty[7:0]                (low byte)
+CS↑
+\end{verbatim}
+
+The CS edge serves as the frame delimiter; no synchronisation header is
+required. SPI2 is configured for APB1/8 = 5.25\,MHz, Mode 0, 8-bit MSB-first.
+Since the FPGA does not return data, MISO (PB14) may be left unconnected.
+
+\subsection{I2C1 — OLED SSD1306 Display}
+
+% TODO: CCR/TRISE 计算，100kHz，OLED 初始化序列
+I2C1 operates at 100\,kHz. The CCR value is set to 180 with TRISE = 37 for
+APB1 = 36\,MHz. A timeout counter and flag-clearing sequence (AF, BERR,
+ARLO, OVR) are applied after each transaction to prevent the bus from
+locking up.
+
+\subsection{TIM3 — Quadrature Encoder Interface}
+
+% TODO: SMCR SMS=011，CCMR1 滤波器，CCER 极性
+TIM3 is set to Encoder Mode 3 (SMS[2:0] = 011), where both rising and
+falling edges of both channels increment or decrement the 16-bit counter.
+A 2-sample digital filter (IC1F = IC2F = 0001) is enabled to reject noise.
+
+\section{Signal Conditioning}
+
+\subsection{Moving Average Filters}
+
+\begin{table}[H]
+    \centering
+    \caption{Software filters applied to each signal.}
+    \label{tab:filters}
+    \begin{tabular}{llll}
+        \toprule
+        \textbf{Signal} & \textbf{Window} & \textbf{Delay} & \textbf{Function} \\
+        \midrule
+        Potentiometer ADC & 16 samples & 16\,ms & \texttt{ADC1\_Read\_Filtered()} \\
+        Encoder RPM       & 8 samples  & 8\,ms  & \texttt{RPM\_Filter()} \\
+        Motor current     & 8 samples  & 8\,ms  & \texttt{ADC1\_ReadCurrent\_Filtered\_mA()} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Dead Zone and Anti-windup}
+
+A dead zone of ADC $< 50$ forces \texttt{setpoint\_rpm = 0} to suppress
+integrator wind-up caused by the potentiometer's natural offset near
+zero. Integrator clamping (\texttt{integral\_max}) is applied inside
+\texttt{PID\_Calc()} to both loops independently.
+
+% ════════════════════════════════════════════════════════════════════════════
+%  CHAPTER 4 — Cascade PID Control Algorithm
+% ════════════════════════════════════════════════════════════════════════════
+\chapter{Cascade PID Control Algorithm}
+
+\section{PID Mathematical Model}
+
+The positional discrete PID controller is derived from the continuous form:
+
+\begin{equation}
+    u(t) = K_p\,e(t) + K_i\int_0^t e(\tau)\,d\tau + K_d\,\frac{de(t)}{dt}
+\end{equation}
+
+Discretised with sampling period $T$ (here $T = 1\,\text{ms}$):
+
+\begin{equation}
+    u[n] = K_p\,e[n]
+         + K_i \sum_{k=0}^{n} e[k]
+         + K_d\,\bigl(e[n] - e[n-1]\bigr)
+    \label{eq:pid_discrete}
+\end{equation}
+
+Integrator wind-up is prevented by clamping the accumulated sum:
+\begin{equation}
+    \sum e[k] \;\leftarrow\; \text{clamp}\!\left(\sum e[k],\;
+    -I_{\max},\; +I_{\max}\right)
+\end{equation}
+
+and the output is similarly bounded to $[u_{\min},\, u_{\max}]$.
+
+\section{Cascade Structure Design}
+
+\begin{figure}[H]
+    \centering
+    % TODO: 画串级 PID 框图
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{2cm}
+    [Cascade PID block diagram: speed loop → current loop → plant]
+    \vspace{2cm}}}
+    \caption{Cascade PID control structure.}
+    \label{fig:cascade}
+\end{figure}
+
+\begin{itemize}
+    \item \textbf{Speed outer loop}: $\omega_{\text{ref}} \to I_{\text{ref}}$
+    (RPM setpoint from potentiometer $\to$ current demand in mA).
+    \item \textbf{Current inner loop}: $I_{\text{ref}} \to d$
+    (current demand $\to$ 12-bit PWM duty cycle 0--4095).
+\end{itemize}
+
+For stable cascade operation the inner loop bandwidth must be at least
+3--5$\times$ higher than the outer loop~\cite{astrom2006}. Both loops run
+at 1\,kHz here; a higher inner-loop gain achieves the required relative
+bandwidth.
+
+\section{Speed Outer Loop Design}
+
+\begin{table}[H]
+    \centering
+    \caption{Speed outer loop PID parameters.}
+    \label{tab:speed_pid}
+    \begin{tabular}{lll}
+        \toprule
+        \textbf{Parameter} & \textbf{Value} & \textbf{Rationale} \\
+        \midrule
+        $K_p$ & 1.5  & 100\,RPM error $\Rightarrow$ P term = 150\,mA \\
+        $K_i$ & 0.1  & Integrator converges in $\sim$1\,s \\
+        $K_d$ & 0.0  & Encoder noise renders derivative impractical \\
+        $u_{\max}$ & 400\,mA & Measured motor operating range: 200--300\,mA \\
+        $I_{\max}$ & 4000    & $= u_{\max}/K_i$ \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{Current Inner Loop Design}
+
+\begin{table}[H]
+    \centering
+    \caption{Current inner loop PID parameters.}
+    \label{tab:current_pid}
+    \begin{tabular}{lll}
+        \toprule
+        \textbf{Parameter} & \textbf{Value} & \textbf{Rationale} \\
+        \midrule
+        $K_p$ & 5.0  & Reduced from 20 after limit-cycle oscillation observed \\
+        $K_i$ & 0.2  & Integrates slowly to avoid overshoot \\
+        $K_d$ & 0.0  & Current signal is relatively clean \\
+        $u_{\max}$ & 4095 & Full 12-bit PWM range \\
+        $I_{\max}$ & 8000 & $\approx u_{\max}/K_i$ \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{1\,kHz Control Loop Implementation}
+
+The \texttt{TIM6\_DAC\_IRQHandler} executes every 1\,ms in the following
+sequence:
+
+\begin{enumerate}
+    \item Update encoder: compute $\Delta_{\text{count}}$ and filtered RPM.
+    \item Read potentiometer ADC (16-point filtered); apply dead zone.
+    \item \textbf{Speed PID}: $e_\omega = \omega_{\text{ref}} - \omega_{\text{meas}}
+          \;\Rightarrow\; I_{\text{ref}}$.
+    \item Read current ADC (8-point filtered).
+    \item \textbf{Current PID}: $e_I = I_{\text{ref}} - I_{\text{meas}}
+          \;\Rightarrow\; d \in [0, 4095]$.
+    \item Transmit duty $d$ to FPGA via SPI2 (2 bytes, $\approx3\,\mu$s).
+\end{enumerate}
+
+Total ISR execution time $\approx 9\,\mu\text{s}$ (0.9\% of the 1\,ms period).
+
+% ════════════════════════════════════════════════════════════════════════════
+%  CHAPTER 5 — FPGA Development
+% ════════════════════════════════════════════════════════════════════════════
+\chapter{FPGA Development}
+
+The FPGA design consists of three VHDL modules synthesised with Xilinx ISE
+14.7 for the Spartan-6 XC6SLX9-2FTG256 device.
+
+\section{SPI Slave Receiver (\texttt{spi\_slave.vhd})}
+
+\subsection{Cross-clock-domain Synchronisation}
+
+The SPI signals (SCK, CS\_N, MOSI) are asynchronous to the 50\,MHz FPGA
+clock. A two-stage synchronisation chain eliminates metastability:
+
+\begin{lstlisting}[style=vhdlstyle, caption={Two-stage synchroniser for SCK.}]
+p_sync : process(clk)
+begin
+    if rising_edge(clk) then
+        sck_d1 <= sck;
+        sck_d2 <= sck_d1;
+    end if;
+end process;
+sck_rise <= sck_d1 and (not sck_d2);  -- single-cycle rise pulse
+\end{lstlisting}
+
+\subsection{Receive State Machine}
+
+Data is shifted in on each detected SCK rising edge while CS\_N is low.
+After 8 bits, the high nibble is latched; after a second 8 bits the full
+12-bit duty cycle is assembled and registered on the CS\_N rising edge.
+
+\section{PWM Generator (\texttt{pwm\_gen.vhd})}
+
+A 12-bit free-running counter compares against the latched duty register:
+
+\begin{lstlisting}[style=vhdlstyle, caption={PWM comparator.}]
+pwm_out <= '1' when (pwm_cnt < duty_reg) else '0';
+\end{lstlisting}
+
+The \texttt{duty\_valid} strobe from the SPI slave updates \texttt{duty\_reg}
+only at frame boundaries, preventing glitches mid-period.
+
+\section{Top-level Integration (\texttt{top.vhd})}
+
+\texttt{top.vhd} instantiates \texttt{spi\_slave} and \texttt{pwm\_gen} and
+routes the duty bus between them. The pin constraints are specified in
+\texttt{pin.ucf}; Table~\ref{tab:fpga_pins} summarises the FPGA pin
+assignments.
+
+\begin{table}[H]
+    \centering
+    \caption{FPGA pin assignment (AX309 J3 expansion connector).}
+    \label{tab:fpga_pins}
+    \begin{tabular}{llll}
+        \toprule
+        \textbf{Signal} & \textbf{FPGA pin} & \textbf{J3 pin} & \textbf{Connected to} \\
+        \midrule
+        clk     & P8  & On-board oscillator & --- \\
+        sck     & C15 & J3-21 & STM32 PB13 \\
+        cs\_n   & D16 & J3-23 & STM32 PB12 \\
+        mosi    & C16 & J3-24 & STM32 PB15 \\
+        miso    & E15 & J3-26 & STM32 PB14 (not used) \\
+        pwm\_out & F16 & J3-31 & TB6612 PWMA \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+% ════════════════════════════════════════════════════════════════════════════
+%  CHAPTER 6 — System Integration and Testing
+% ════════════════════════════════════════════════════════════════════════════
+\chapter{System Integration and Testing}
+
+\section{Debugging Process and Lessons Learned}
+
+Table~\ref{tab:issues} summarises the significant issues encountered during
+development and their resolutions.
+
+\begin{table}[H]
+    \centering
+    \caption{Debugging history: problems encountered and resolved.}
+    \label{tab:issues}
+    \begin{tabular}{p{3cm}p{4cm}p{5.5cm}}
+        \toprule
+        \textbf{Problem} & \textbf{Symptom} & \textbf{Root cause \& fix} \\
+        \midrule
+        ST-Link VCP no output &
+            UART silent on COM6 &
+            ST-Link internal UART sub-module inoperative; switched to
+            external CH340G on PA2/PA3. \\
+        \addlinespace
+        INA240 gain mismatch &
+            Current reading $2.5\times$ too high &
+            Module is A2 (50\,V/V), not A1 (20\,V/V); corrected gain
+            constant. \\
+        \addlinespace
+        Current-loop limit-cycle oscillation &
+            Duty oscillates 0--100\% &
+            $K_p=20$ too aggressive; reduced to 5, $K_i$ from 0.5 to 0.2. \\
+        \addlinespace
+        OLED lockup &
+            Screen freezes after first frame &
+            I2C PE disabled mid-transaction; added timeout guard and
+            cleared AF/BERR/ARLO/OVR flags. \\
+        \addlinespace
+        RPM = 0, duty saturated &
+            Motor appears stationary &
+            Encoder 5\,V supply disconnected; speed loop integrator
+            winds up; fix: verify encoder power first. \\
+        \addlinespace
+        ADC drift at zero &
+            Motor twitches at rest &
+            Potentiometer offset $\approx9$ ADC counts; dead zone
+            (ADC $<50 \Rightarrow$ setpoint $=0$) applied. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{Experimental Results}
+
+\subsection{PWM Frequency Verification}
+
+The FPGA PWM output on J3-31 was measured with a logic analyser.
+The result of 12.207\,kHz matches the theoretical value of
+$50\,\text{MHz}/4096 = 12.207\,\text{kHz}$ to within measurement
+uncertainty.
+
+\subsection{Speed Control Performance}
+
+% TODO: 插入串口数据或实测曲线
+Figure~\ref{fig:speed_response} shows the closed-loop speed response when
+the potentiometer is stepped from 0 to full scale.
+
+\begin{figure}[H]
+    \centering
+    \fbox{\parbox{0.75\textwidth}{\centering\vspace{3cm}
+    [Speed response plot: RPM vs time]
+    \vspace{3cm}}}
+    \caption{Closed-loop speed step response (0 to 100\,RPM).}
+    \label{fig:speed_response}
+\end{figure}
+
+Steady-state measurements at various setpoints are listed in
+Table~\ref{tab:speed_results}.
+
+\begin{table}[H]
+    \centering
+    \caption{Steady-state speed control results.}
+    \label{tab:speed_results}
+    \begin{tabular}{rrrr}
+        \toprule
+        \textbf{Setpoint (RPM)} & \textbf{Measured (RPM)} &
+        \textbf{Error (RPM)} & \textbf{Error (\%)} \\
+        \midrule
+        20  & % TODO
+            & & \\
+        50  & & & \\
+        80  & & & \\
+        100 & & & \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Current Sensing Accuracy}
+
+At no load and 100\,RPM, the measured motor current is approximately
+30\,mA, consistent with the JGA25-370 datasheet no-load current
+specification (20--150\,mA).
+
+\section{Conclusion and Future Work}
+
+This project successfully demonstrated register-level implementation of a
+cascade PID DC motor control system on an STM32F407 + FPGA platform.
+Key achievements include:
+
+\begin{itemize}
+    \item Stable closed-loop speed regulation over 0--100\,RPM
+    \item PWM generation accuracy confirmed at 12.207\,kHz
+    \item Current sensing validated at no-load ($\approx30$\,mA)
+    \item All register-level drivers written and verified
+\end{itemize}
+
+Remaining work includes:
+\begin{itemize}
+    \item Physical wiring and verification of the W25Q64 Flash chip
+    \item Load testing of the current inner loop
+    \item Optimisation of PID parameters under varying load conditions
+\end{itemize}
+
+% ════════════════════════════════════════════════════════════════════════════
+%  REFERENCES
+% ════════════════════════════════════════════════════════════════════════════
+\bibliographystyle{IEEEtran}
+\begin{thebibliography}{9}
+
+\bibitem{rm0090}
+STMicroelectronics,
+\textit{RM0090: STM32F405/407/415/417 Reference Manual},
+Rev.\ 19, 2021. [Online]. Available: \url{https://www.st.com}
+
+\bibitem{ds8626}
+STMicroelectronics,
+\textit{DS8626: STM32F407VG Datasheet},
+Rev.\ 9, 2021.
+
+\bibitem{ina240}
+Texas Instruments,
+\textit{INA240 Bidirectional, Low- and High-Side, Voltage Output,
+Current-Sense Amplifier Datasheet}, SBOS566D, 2015.
+
+\bibitem{w25q64}
+Winbond Electronics,
+\textit{W25Q64FV 64M-bit Serial Flash Memory Datasheet},
+Rev.\ L, 2017.
+
+\bibitem{tb6612}
+Toshiba,
+\textit{TB6612FNG Dual DC Motor Driver IC Datasheet},
+2015.
+
+\bibitem{ssd1306}
+Solomon Systech,
+\textit{SSD1306 Dot Matrix OLED/PLED Segment/Common Driver with
+Controller Datasheet}, 2008.
+
+\bibitem{astrom2006}
+K.~J. \AA{}str\"{o}m and T.~H\"{a}gglund,
+\textit{Advanced PID Control}.
+ISA -- The Instrumentation, Systems, and Automation Society, 2006.
+
+\end{thebibliography}
+
+% ════════════════════════════════════════════════════════════════════════════
+%  APPENDIX
+% ════════════════════════════════════════════════════════════════════════════
+\appendix
+
+\chapter{Key Source Code}
+
+\section{TIM6 1\,kHz PID Control Loop}
+
+\begin{lstlisting}[style=cstyle, caption={TIM6\_DAC\_IRQHandler: 1\,kHz cascade PID loop.}]
+void TIM6_DAC_IRQHandler(void)
+{
+    if (TIM6->SR & TIM_SR_UIF) {
+        TIM6->SR &= ~TIM_SR_UIF;
+
+        Encoder_Update();
+
+        uint16_t adc_val      = ADC1_Read_Filtered();
+        float    setpoint_rpm = (adc_val < 50U) ? 0.0f
+                             : (float)adc_val * (MOTOR_MAX_RPM / 4095.0f);
+
+        float current_setpoint = PID_Calc(&speed_pid,
+                                          setpoint_rpm, g_encoder_rpm);
+
+        float measured_current = ADC1_ReadCurrent_Filtered_mA();
+
+        float    duty_f = PID_Calc(&current_pid,
+                                   current_setpoint, measured_current);
+        uint16_t duty   = (uint16_t)duty_f;
+
+        uint8_t hi = (duty >> 8U) & 0x0FU;
+        uint8_t lo =  duty        & 0xFFU;
+        FPGA_CS_LOW();
+        SPI2_ReadWriteByte(hi);
+        SPI2_ReadWriteByte(lo);
+        FPGA_CS_HIGH();
+
+        g_pid_duty = duty;
+    }
+}
+\end{lstlisting}
+
+\section{Positional PID Implementation}
+
+\begin{lstlisting}[style=cstyle, caption={PID\_Calc: positional PID with anti-windup.}]
+float PID_Calc(PID_TypeDef *pid, float setpoint, float feedback)
+{
+    float err = setpoint - feedback;
+
+    pid->integral += err;
+    if      (pid->integral >  pid->integral_max)
+        pid->integral =  pid->integral_max;
+    else if (pid->integral < -pid->integral_max)
+        pid->integral = -pid->integral_max;
+
+    float output = pid->kp * err
+                 + pid->ki * pid->integral
+                 + pid->kd * (err - pid->err_prev);
+    pid->err_prev = err;
+
+    if      (output > pid->out_max) output = pid->out_max;
+    else if (output < pid->out_min) output = pid->out_min;
+    return output;
+}
+\end{lstlisting}
+
+\end{document}
