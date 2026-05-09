@@ -228,6 +228,16 @@ STM32F407VG（Cortex-M4，168\,MHz，带 FPU）外设资源丰富，处理能力
     \end{tabular}
 \end{table}
 
+\subsection{片上外设与地址空间}
+
+STM32F407 属于典型的片上系统（System-on-Chip, SoC）：CPU core、SRAM、Flash 以及 UART、ADC、SPI、I2C、TIM 等外设都集成在同一颗芯片中，但外设并不属于 CPU core 内部。CPU core 通过片上总线访问这些外设，外设则通过一组控制寄存器、状态寄存器和数据寄存器与 CPU 交换信息。
+
+处理器访问外设通常有两种模型：I/O-mapped I/O 与 memory-mapped I/O。I/O-mapped I/O 使用独立于普通内存的 I/O 地址空间，地址更像是一组端口号（port number）。CPU 执行专门的 I/O 指令时，会在总线上发起一次 I/O 访问，并给出端口号；哪个外设被硬件设计为响应该端口号，哪个外设就完成对应的数据读写。因此，I/O 地址空间并不是一块“小内存”，也不是 RAM 的一部分，而是由 CPU 架构和总线协议定义的独立端口编号空间。
+
+Memory-mapped I/O 则将外设寄存器映射到普通内存地址空间中。CPU 使用普通的 load/store 指令访问某个地址时，地址译码逻辑会判断该地址对应 RAM、Flash 还是某个外设寄存器。如果地址落在外设区域，访问就会被转发给对应外设。例如 GPIO、USART 或 SPI 的寄存器地址虽然写成类似内存地址的形式，但实际访问对象是外设寄存器，而不是 SRAM。
+
+本项目使用的 STM32F407 采用 memory-mapped I/O 模型。也就是说，程序中的寄存器级驱动本质上就是通过 C 语言指针或 CMSIS 结构体访问固定地址处的外设寄存器，例如使能 RCC 时钟、配置 GPIO 复用功能、设置 USART 波特率或读写 SPI 数据寄存器。由于 CPU 与外设位于同一芯片内部，数据不需要离开集成电路，通信延迟和功耗都较低。
+
 \subsection{引脚分配与外设映射}
 
 表~\ref{tab:pins} 列出了全部 16 个信号引脚的分配情况。
