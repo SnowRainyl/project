@@ -1080,12 +1080,17 @@ $$
 Buck output is always lower than input.
 
 > **[本项目]**: **PWM 电机调速本质上就是一个 Buck 变换器**。
-> - H 桥高侧 MOSFET = Buck 的开关 $M_1$；内置续流二极管 = Buck 的 $D_1$
-> - 电机绕组电感（数 mH）= Buck 的储能电感 $L$
-> - 占空比：$\delta = \text{duty} / 4095$（12-bit，0~4095）
-> - 电机两端平均电压：$V_{motor} = \delta \times V_{VM}$（VM 是电机电源，5~15V）
-> - FPGA 以 50MHz/4096 ≈ **12.2kHz** 开关，对应 Buck 的 $f_{sw}$
-> - 电机绕组 $L$ 足够大、$f_{sw}$ 足够高，运行在 **连续导通模式（CCM）**，电流平滑不断续，这就是为什么 12.2kHz 比 1kHz 更好（CCM 条件 $L > V_{out}/(2I_{min}f_{sw})$ 更容易满足）
+> - H 桥高侧 MOSFET = Buck 的开关 M1；内置续流二极管 = Buck 的 D1
+> - 电机绕组电感（数 mH）= Buck 的储能电感 L
+> - 占空比：δ = duty / 4095（12-bit，0~4095）
+> - 电机两端平均电压：V_motor = δ × V_VM（VM 是电机电源，本项目 12V）
+> - FPGA 以 50MHz/4096 ≈ 12.2kHz 开关，对应 Buck 的 f_sw
+> - 电机绕组 L 足够大、f_sw 足够高，运行在连续导通模式（CCM），电流平滑不断续
+>
+> **但注意**：这不是一个真正的 Buck DC-DC 模块。区别在于：
+> - 真正的 Buck：有独立储能电感，输出平滑直流，接任何负载都稳定
+> - 本项目：12V 外部电源直通 TB6612 VM，H 桥 MOSFET 直接开关，利用**电机绕组自身的电感**来平滑电流——省掉了外部电感。这只对电机这种感性负载成立，换成纯阻性负载就不行了
+> - 电路拓扑：12V → TB6612 VM → 电机（无额外 Buck 级）
 
 ### Current relations
 
