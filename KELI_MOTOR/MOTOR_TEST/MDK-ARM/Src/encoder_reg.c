@@ -260,11 +260,6 @@ void Encoder_ResetCount(void)
     }
 }
 
-int16_t Encoder_GetDelta(void)
-{
-    return g_encoder_delta;
-}
-
 float Encoder_GetSpeed_RPM(void)
 {
     return g_encoder_rpm;

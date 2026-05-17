@@ -71,14 +71,9 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN 0 */
 static char uart_buf[128];
 
-/* Flash 测试结果，可在 Watch 窗口直接观察 */
+/* Flash 连接状态（1 = ID 正确 0xEF16） */
 uint16_t flash_id    = 0;
-uint8_t  flash_id_ok = 0;   /* 1 = ID 正确 (0xEF16) */
-
-static const float write_data[4] = {3.1415f, -2.718f, 100.5f, 0.001f};
-static float       read_data[4]  = {0.0f, 0.0f, 0.0f, 0.0f};
-uint16_t setpoint;
-#define FLASH_TEST_ADDR   0x001000UL   /* 测试扇区：第2扇区，避免影响扇区0 */
+uint8_t  flash_id_ok = 0;
 
 /* ===== PID 参数 Flash 存储 ===== */
 #define PID_FLASH_ADDR    0x000000UL   /* 回到扇区0（唯一确认过写入成功的地址） */
@@ -230,7 +225,6 @@ int main(void)
 	ADC1_Init();
 	Motor_Control_Init();   /* TIM6 1kHz + PID 初始化，从此 PID 在中断里自动运行 */
   /* USER CODE END Init */
-setpoint =100;
 
   /* USER CODE BEGIN SysInit */
 
@@ -268,53 +262,6 @@ setpoint =100;
   /* Step 2: 解除写保护（SR1=0x00, SR2=0x00） */
   W25Q64_Unprotect();
   UART_SendString("[Flash] Unprotect done\r\n");
-
-  /* Step 3: 擦除测试扇区（4KB @ 0x001000），tSE max 400ms */
-  W25Q64_Erase_Sector(FLASH_TEST_ADDR);
-  {
-      uint8_t sr1e = W25Q64_ReadSR1();
-      snprintf(uart_buf, sizeof(uart_buf),
-               "[Flash] Erase done  SR1=0x%02X %s\r\n", sr1e,
-               (sr1e & W25Q64_SR1_WEL) ? "WEL=1(REJECTED!)" : "WEL=0(OK)");
-      UART_SendString(uart_buf);
-  }
-
-  /* Step 4: 写入4个float */
-  W25Q64_Write_4Floats(FLASH_TEST_ADDR, (float *)write_data);
-  UART_SendString("[Flash] Write done\r\n");
-
-  /* Step 5: 读回并通过 UART 打印 */
-  W25Q64_Read_4Floats(FLASH_TEST_ADDR, read_data);
-  snprintf(uart_buf, sizeof(uart_buf),
-           "[Flash] Read: %.4f  %.4f  %.4f  %.4f\r\n",
-           (double)read_data[0], (double)read_data[1],
-           (double)read_data[2], (double)read_data[3]);
-  UART_SendString(uart_buf);
-
-					 
-					 
-					 
-		// 自回环测试
-		uint8_t test_tx[] = {0xAA, 0x55, 0xA5, 0x5A};
-		uint8_t test_rx[4] = {0};
-		uint8_t loopback_ok = 1;
-
-		FPGA_CS_LOW();
-		for (int i = 0; i < 4; i++) {
-				test_rx[i] = SPI2_ReadWriteByte(test_tx[i]);
-		}
-		FPGA_CS_HIGH();
-
-		for (int i = 0; i < 4; i++) {
-				if (test_rx[i] != test_tx[i]) { loopback_ok = 0; break; }
-		}
-
-		snprintf(uart_buf, sizeof(uart_buf),
-				"[SPI2 Loopback] TX:%02X%02X%02X%02X RX:%02X%02X%02X%02X %s\r\n",
-				test_tx[0], test_tx[1], test_tx[2], test_tx[3],
-				test_rx[0], test_rx[1], test_rx[2], test_rx[3],
-				loopback_ok ? "PASS" : "FAIL");
-		UART_SendString(uart_buf);
 
   /* 上电尝试从Flash加载PID参数（Flash未接线时自动跳过） */
   PID_LoadFromFlash();
@@ -381,21 +328,6 @@ setpoint =100;
         OLED_ShowStr(0, 6, (uint8_t *)oled_buf, FontSize6x8, 0);
     }
 
-		
-				
-//				uint8_t hi = (setpoint >> 8) & 0x0F;
-//        uint8_t lo =  setpoint       & 0xFF;
-//			
-//        FPGA_CS_LOW();
-//        SPI2_ReadWriteByte(hi);
-//        SPI2_ReadWriteByte(lo);
-//        FPGA_CS_HIGH();
-//		setpoint = setpoint +100;
-//		if (setpoint >4000)
-//		{
-//			setpoint = 200;
-//		}
-		
   }
   /* USER CODE END 3 */
 }

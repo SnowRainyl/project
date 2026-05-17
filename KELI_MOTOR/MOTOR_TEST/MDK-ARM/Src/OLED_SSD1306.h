@@ -10,10 +10,6 @@ extern "C"{
 #define OLED_USING_HARDWARE_I2C 1 //使用硬件i2c
 #define OLED_USING_SOFTWARE_I2C 0 //使用软件i2c(需初始化软件i2c)
 
-//#if OLED_USING_HARDWARE_I2C
-//#include "i2c.h"
-//#define I2Cx hi2c1
-//#endif
 #if OLED_USING_SOFTWARE_I2C
 #include "software_i2c.h"
 #endif
@@ -37,9 +33,6 @@ void OLED_LocalFill(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t Loca
 void OLED_Init(void);
 void OLED_ShowChar(uint8_t x, uint8_t y, uint8_t DisplayChar, uint8_t FontSize, uint8_t Color_Turn);
 void OLED_ShowStr(uint8_t x, uint8_t y, uint8_t *DisplayStr, uint8_t FontSize, uint8_t Color_Turn);
-void OLED_ShowCN(uint8_t x, uint8_t y, uint8_t Num, uint8_t Color_Turn);
-void OLED_ShowNum20X40(uint8_t x, uint8_t y, uint8_t Num, uint8_t Color_Turn);
-void OLED_ShowBMP(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t *BMP);
 
 #ifdef __cplusplus
 }

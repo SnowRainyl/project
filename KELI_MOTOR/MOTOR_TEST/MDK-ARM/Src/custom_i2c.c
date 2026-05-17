@@ -12,12 +12,6 @@
 #include "custom_i2c.h"
 #include "stm32f4xx.h"
 
-/* 使用已有的 SSD1306 驱动库来辅助显示字符串 */
-#include <string.h>
-
-/* 底层I2C驱动已经由 OLED_SSD1306 库处理，这里不再需要
-   以前的初始化、起停、写字节等代码都已移除 */
-
 /* 简单的寄存器级 I2C1 驱动，仅支持写操作，用于 OLED 及其它需要
    直接访问 I2C 的模块。初始化必须先调用一次。 */
 
@@ -44,20 +38,6 @@ void I2C_Init(void) {
 }
 
 #define I2C_TIMEOUT  10000U
-
-void I2C_Start(void) {
-    I2C1->CR1 |= I2C_CR1_START;
-    uint32_t t = I2C_TIMEOUT;
-    while (!(I2C1->SR1 & I2C_SR1_SB) && --t);
-}
-void I2C_Stop(void) {
-    I2C1->CR1 |= I2C_CR1_STOP;
-}
-void I2C_SendByte(unsigned char byte) {
-    I2C1->DR = byte;
-    uint32_t t = I2C_TIMEOUT;
-    while (!(I2C1->SR1 & I2C_SR1_TXE) && --t);
-}
 
 /* helper to write memory (control + data sequence) */
 void i2c_write_memory(uint8_t slav_add, uint8_t memadd, uint8_t data, uint8_t length)

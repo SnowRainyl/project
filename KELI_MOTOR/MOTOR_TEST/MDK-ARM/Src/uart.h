@@ -20,9 +20,6 @@ void UART_SendChar(char c);
 /* 发送字符串 */
 void UART_SendString(const char *str);
 
-/* 发送整数（用于打印数值，如转速、PID误差等） */
-void UART_SendInt(int val);
-
 /* 非阻塞接收一个字节：有数据返回1并写入*c，否则返回0 */
 uint8_t UART_RecvChar(char *c);
 

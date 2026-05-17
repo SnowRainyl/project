@@ -119,23 +119,3 @@ uint8_t UART_RecvChar(char *c) {
     return 0;
 }
 
-void UART_SendInt(int val) {
-    char buf[12];
-    int i = 0;
-    if (val < 0) {
-        UART_SendChar('-');
-        val = -val;
-    }
-    if (val == 0) {
-        UART_SendChar('0');
-        return;
-    }
-    while (val > 0) {
-        buf[i++] = '0' + (val % 10);
-        val /= 10;
-    }
-    /* 反转输出 */
-    for (int j = i - 1; j >= 0; j--) {
-        UART_SendChar(buf[j]);
-    }
-}

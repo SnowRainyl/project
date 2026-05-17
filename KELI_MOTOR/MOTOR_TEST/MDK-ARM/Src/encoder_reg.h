@@ -100,12 +100,6 @@ int32_t Encoder_GetCount(void);
 void Encoder_ResetCount(void);
 
 /**
- * @brief 读取最近一次 Encoder_Update() 的计数增量
- * @return 有符号增量（单位：counts/ms）
- */
-int16_t Encoder_GetDelta(void);
-
-/**
  * @brief 读取最新滤波后的转速
  * @return 转速，单位 RPM
  */
