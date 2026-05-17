@@ -56,8 +56,8 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
-static PID_TypeDef speed_pid;    /* 速度外环：setpoint=RPM → output=电流给定(mA) */
-static PID_TypeDef current_pid;  /* 电流内环：setpoint=mA  → output=PWM占空比     */
+PID_TypeDef speed_pid;    /* 速度外环：setpoint=RPM → output=电流给定(mA) */
+PID_TypeDef current_pid;  /* 电流内环：setpoint=mA  → output=PWM占空比     */
 volatile uint16_t  g_pid_duty = 0;   /* 供 main.c 读取，用于串口/OLED 显示 */
 volatile uint16_t  g_adc_val  = 0;   /* 电位器原始 ADC 值（0~4095） */
 

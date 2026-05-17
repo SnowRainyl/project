@@ -23,8 +23,11 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <string.h>
 #include "uart.h"
-#include "custom_i2c.h"  /* I2C + OLED 显示接口 */
+#include "pid.h"
+#include "stm32f4xx_it.h"
+#include "custom_i2c.h"
 #include "OLED_SSD1306.h"
 #include "spi_Reg.h"
 #include "w25q64.h"
@@ -76,6 +79,126 @@ static const float write_data[4] = {3.1415f, -2.718f, 100.5f, 0.001f};
 static float       read_data[4]  = {0.0f, 0.0f, 0.0f, 0.0f};
 uint16_t setpoint;
 #define FLASH_TEST_ADDR   0x001000UL   /* 测试扇区：第2扇区，避免影响扇区0 */
+
+/* ===== PID 参数 Flash 存储 ===== */
+#define PID_FLASH_ADDR    0x000000UL   /* 回到扇区0（唯一确认过写入成功的地址） */
+#define PID_FLASH_MAGIC   12345.678f   /* 魔数：Flash 擦除后全0xFF，读回!=此值说明未写过 */
+static float pid_flash_buf[8];         /* [magic, sp_kp, sp_ki, sp_kd, cp_kp, cp_ki, cp_kd, 0] */
+
+/* ===== 串口命令行缓冲 ===== */
+static char    cmd_buf[64];
+static uint8_t cmd_len = 0;
+
+static void PID_SaveToFlash(void) {
+    if (!flash_id_ok) {
+        UART_SendString("[PID] Flash未连接，save跳过\r\n");
+        return;
+    }
+    pid_flash_buf[0] = PID_FLASH_MAGIC;
+    pid_flash_buf[1] = speed_pid.kp;
+    pid_flash_buf[2] = speed_pid.ki;
+    pid_flash_buf[3] = speed_pid.kd;
+    pid_flash_buf[4] = current_pid.kp;
+    pid_flash_buf[5] = current_pid.ki;
+    pid_flash_buf[6] = current_pid.kd;
+    pid_flash_buf[7] = 0.0f;
+    /* 擦除前：读 SR1+SR2，重点检查 CMP(SR2 bit6) 是否为1
+     * CMP=1 且 BP=000 → 全片保护，所有写/擦除静默失败，WEL保持1 */
+    uint8_t sr1_before = W25Q64_ReadSR1();
+    uint8_t sr2_before = W25Q64_ReadSR2();
+    snprintf(uart_buf, sizeof(uart_buf),
+             "[PID] SR1=0x%02X SR2=0x%02X (WEL=%d BP=%d CMP=%d SRP1=%d)\r\n",
+             sr1_before, sr2_before,
+             (sr1_before >> 1) & 1,
+             (sr1_before >> 2) & 7,
+             (sr2_before >> 6) & 1,   /* CMP */
+             sr2_before & 1);         /* SRP1 */
+    UART_SendString(uart_buf);
+
+    W25Q64_Erase_Sector(PID_FLASH_ADDR);
+    W25Q64_Write_4Floats(PID_FLASH_ADDR,      &pid_flash_buf[0]);
+    W25Q64_Write_4Floats(PID_FLASH_ADDR + 16, &pid_flash_buf[4]);
+
+    /* 立即回读验证（排查写入是否真正成功） */
+    float verify[4] = {0};
+    W25Q64_Read_4Floats(PID_FLASH_ADDR, verify);
+    if (verify[0] == PID_FLASH_MAGIC) {
+        snprintf(uart_buf, sizeof(uart_buf),
+                 "[PID] 已保存到Flash（验证OK，sp_kp=%.4f）\r\n",
+                 (double)verify[1]);
+        UART_SendString(uart_buf);
+    } else {
+        /* 原始 hex 辅助诊断 */
+        uint8_t *raw = (uint8_t *)verify;
+        snprintf(uart_buf, sizeof(uart_buf),
+                 "[PID] Flash写入失败！readback=%.4f raw=%02X%02X%02X%02X\r\n",
+                 (double)verify[0],
+                 raw[0], raw[1], raw[2], raw[3]);
+        UART_SendString(uart_buf);
+    }
+}
+
+static void PID_LoadFromFlash(void) {
+    if (!flash_id_ok) {
+        UART_SendString("[PID] Flash未连接，使用默认参数\r\n");
+        return;
+    }
+    W25Q64_Read_4Floats(PID_FLASH_ADDR,      &pid_flash_buf[0]);
+    W25Q64_Read_4Floats(PID_FLASH_ADDR + 16, &pid_flash_buf[4]);
+
+    /* 始终打印 Flash 中读到的 magic，方便判断是否擦除/写入成功 */
+    uint8_t *raw = (uint8_t *)&pid_flash_buf[0];
+    snprintf(uart_buf, sizeof(uart_buf),
+             "[PID] Flash magic=%.4f raw=%02X%02X%02X%02X\r\n",
+             (double)pid_flash_buf[0],
+             raw[0], raw[1], raw[2], raw[3]);
+    UART_SendString(uart_buf);
+
+    if (pid_flash_buf[0] != PID_FLASH_MAGIC) {
+        UART_SendString("[PID] Flash无有效参数，使用默认值\r\n");
+        return;
+    }
+    speed_pid.kp   = pid_flash_buf[1];
+    speed_pid.ki   = pid_flash_buf[2];
+    speed_pid.kd   = pid_flash_buf[3];
+    current_pid.kp = pid_flash_buf[4];
+    current_pid.ki = pid_flash_buf[5];
+    current_pid.kd = pid_flash_buf[6];
+    UART_SendString("[PID] 已从Flash加载参数\r\n");
+}
+
+static void handle_pid_cmd(const char *cmd) {
+    float val;
+    /* 速度外环 */
+    if      (sscanf(cmd, "set sp %f", &val) == 1) { speed_pid.kp = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_kp=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    else if (sscanf(cmd, "set si %f", &val) == 1) { speed_pid.ki = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_ki=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    else if (sscanf(cmd, "set sd %f", &val) == 1) { speed_pid.kd = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_kd=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    /* 电流内环 */
+    else if (sscanf(cmd, "set cp %f", &val) == 1) { current_pid.kp = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_kp=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    else if (sscanf(cmd, "set ci %f", &val) == 1) { current_pid.ki = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_ki=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    else if (sscanf(cmd, "set cd %f", &val) == 1) { current_pid.kd = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_kd=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    /* 通用操作 */
+    else if (strcmp(cmd, "save") == 0) { PID_SaveToFlash(); }
+    else if (strcmp(cmd, "load") == 0) { PID_LoadFromFlash(); }
+    else if (strcmp(cmd, "show") == 0) {
+        snprintf(uart_buf, sizeof(uart_buf),
+            "speed:   kp=%.4f ki=%.4f kd=%.4f\r\ncurrent: kp=%.4f ki=%.4f kd=%.4f\r\n",
+            (double)speed_pid.kp,   (double)speed_pid.ki,   (double)speed_pid.kd,
+            (double)current_pid.kp, (double)current_pid.ki, (double)current_pid.kd);
+        UART_SendString(uart_buf);
+    }
+    else if (strcmp(cmd, "help") == 0) {
+        UART_SendString("Commands:\r\n"
+                        "  set sp/si/sd <val>  speed kp/ki/kd\r\n"
+                        "  set cp/ci/cd <val>  current kp/ki/kd\r\n"
+                        "  show   print params\r\n"
+                        "  save   write to Flash\r\n"
+                        "  load   read from Flash\r\n");
+    }
+    else if (cmd[0] != '\0') {
+        UART_SendString("[PID] unknown cmd, type 'help'\r\n");
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -148,7 +271,13 @@ setpoint =100;
 
   /* Step 3: 擦除测试扇区（4KB @ 0x001000），tSE max 400ms */
   W25Q64_Erase_Sector(FLASH_TEST_ADDR);
-  UART_SendString("[Flash] Erase done\r\n");
+  {
+      uint8_t sr1e = W25Q64_ReadSR1();
+      snprintf(uart_buf, sizeof(uart_buf),
+               "[Flash] Erase done  SR1=0x%02X %s\r\n", sr1e,
+               (sr1e & W25Q64_SR1_WEL) ? "WEL=1(REJECTED!)" : "WEL=0(OK)");
+      UART_SendString(uart_buf);
+  }
 
   /* Step 4: 写入4个float */
   W25Q64_Write_4Floats(FLASH_TEST_ADDR, (float *)write_data);
@@ -187,6 +316,10 @@ setpoint =100;
 				loopback_ok ? "PASS" : "FAIL");
 		UART_SendString(uart_buf);
 
+  /* 上电尝试从Flash加载PID参数（Flash未接线时自动跳过） */
+  PID_LoadFromFlash();
+  UART_SendString("type 'help' for PID commands\r\n");
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -197,33 +330,56 @@ setpoint =100;
 
     /* USER CODE BEGIN 3 */
     /* PID 控制环已在 TIM6 1kHz 中断里自动运行，主循环只负责监控打印 */
-    uint16_t curr_raw = ADC1_ReadChannel(1U);
-    snprintf(uart_buf, sizeof(uart_buf),
-             "RPM=%.1f  duty=%4u (%.1f%%)  adc=%4u  curr_raw=%4u  curr=%.1fmA\r\n",
-             (double)g_encoder_rpm,
-             g_pid_duty, (double)g_pid_duty / 40.95,
-             g_adc_val, curr_raw,
-             (double)g_motor_current_mA);
-    UART_SendString(uart_buf);
 
-    /* ---- OLED 实时数据刷新（5Hz，与串口同步） ----
-     *  每次把标签+数值整行重写，避免残影。
-     *  y 是页编号（0~7），FontSize6x8 每页 8px，128×64 共 8 页。
-     *  固定宽度格式（%-Nf/%-N.1f）尾部空格自动覆盖旧数字。
-     * ------------------------------------------------------------ */
-    char oled_buf[22];
+    /* ---- 第一步：先轮询串口 200ms，期间不发任何数据，保证收得到命令 ---- */
+    uint8_t  rx_active    = 0;
+    uint32_t t0           = HAL_GetTick();
+    uint32_t last_rx_tick = 0;   /* 最后一次收到字符的时刻 */
+    while (HAL_GetTick() - t0 < 200) {
+        char ch;
+        if (UART_RecvChar(&ch)) {
+            rx_active    = 1;
+            last_rx_tick = HAL_GetTick();
+            if (ch == '\r' || ch == '\n') {
+                if (cmd_len > 0) {
+                    cmd_buf[cmd_len] = '\0';
+                    handle_pid_cmd(cmd_buf);  /* save会在这里阻塞~400ms */
+                    cmd_len      = 0;
+                    last_rx_tick = 0;
+                }
+            } else if (cmd_len < 63) {
+                cmd_buf[cmd_len++] = ch;
+            }
+        }
+        /* 50ms 静默超时：串口助手不发换行符时也能自动执行命令 */
+        if (cmd_len > 0 && last_rx_tick > 0 &&
+            HAL_GetTick() - last_rx_tick >= 50) {
+            cmd_buf[cmd_len] = '\0';
+            handle_pid_cmd(cmd_buf);
+            cmd_len      = 0;
+            last_rx_tick = 0;
+        }
+    }
 
-    /* 第 2 页：RPM: xxx.x   （最多 5+2 = 7 字符数字区）*/
-    snprintf(oled_buf, sizeof(oled_buf), "RPM:%-7.1f", (double)g_encoder_rpm);
-    OLED_ShowStr(0, 2, (uint8_t *)oled_buf, FontSize6x8, 0);
+    /* ---- 第二步：没有命令活动时才打印 RPM / 刷新 OLED（5Hz） ---- */
+    if (!rx_active) {
+        uint16_t curr_raw = ADC1_ReadChannel(1U);
+        snprintf(uart_buf, sizeof(uart_buf),
+                 "RPM=%.1f  duty=%4u (%.1f%%)  adc=%4u  curr_raw=%4u  curr=%.1fmA\r\n",
+                 (double)g_encoder_rpm,
+                 g_pid_duty, (double)g_pid_duty / 40.95,
+                 g_adc_val, curr_raw,
+                 (double)g_motor_current_mA);
+        UART_SendString(uart_buf);
 
-    snprintf(oled_buf, sizeof(oled_buf), "Duty:%-6.1f%%", (double)g_pid_duty / 40.95);
-    OLED_ShowStr(0, 4, (uint8_t *)oled_buf, FontSize6x8, 0);
-
-    snprintf(oled_buf, sizeof(oled_buf), "Curr:%-6.1fmA", (double)g_motor_current_mA);
-    OLED_ShowStr(0, 6, (uint8_t *)oled_buf, FontSize6x8, 0);
-
-    HAL_Delay(200);   /* 5Hz 打印，不影响控制环 */
+        char oled_buf[22];
+        snprintf(oled_buf, sizeof(oled_buf), "RPM:%-7.1f", (double)g_encoder_rpm);
+        OLED_ShowStr(0, 2, (uint8_t *)oled_buf, FontSize6x8, 0);
+        snprintf(oled_buf, sizeof(oled_buf), "Duty:%-6.1f%%", (double)g_pid_duty / 40.95);
+        OLED_ShowStr(0, 4, (uint8_t *)oled_buf, FontSize6x8, 0);
+        snprintf(oled_buf, sizeof(oled_buf), "Curr:%-6.1fmA", (double)g_motor_current_mA);
+        OLED_ShowStr(0, 6, (uint8_t *)oled_buf, FontSize6x8, 0);
+    }
 
 		
 				

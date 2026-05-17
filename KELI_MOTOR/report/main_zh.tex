@@ -220,7 +220,7 @@ STM32F407VG（Cortex-M4，168\,MHz，带 FPU）外设资源丰富，处理能力
         TIM6   & 1\,kHz PID 控制中断 & APB1 84\,MHz \\
         TIM3   & 正交编码器接口       & APB1 84\,MHz \\
         ADC1   & 电位器 + 电流采样    & APB2 21\,MHz \\
-        SPI1   & W25Q64 Flash（未接线）& APB2 5.25\,MHz \\
+        SPI1   & W25Q64 Flash（已验证，ID = 0xEF16）& APB2 5.25\,MHz \\
         SPI2   & FPGA 占空比传输      & APB1 5.25\,MHz \\
         I2C1   & OLED SSD1306 显示屏  & APB1 100\,kHz \\
         USART2 & 串口调试（CH340G）   & APB1 115200 baud \\
@@ -436,7 +436,11 @@ ADC1 采用软件触发，通过 SQR3 寄存器动态切换采样通道。时钟
 
 通信时序为：拉低片选引脚（选中从机）$\to$ 收发数据字节 $\to$ 拉高片选引脚（释放从机）。
 
-W25Q64FV 指令集包括读 ID（0x90）、页编程（0x02）、扇区擦除（0x20）、读数据（0x03）；写操作前必须先发写使能指令（0x06）。驱动已通过 SPI1 自回环测试（PASS）。注意：芯片目前尚未接线，接线后需重新验证读写功能。
+W25Q64FV（8\,MB NOR Flash，JEDEC ID \texttt{0xEF16}）的主要指令为：读 ID（0x90）、写使能（0x06）、扇区擦除（0x20，4\,KB，$t_{SE}$ 最大 400\,ms）、页编程（0x02，256\,字节，$t_{PP}$ 最大 3\,ms）、读数据（0x03）。每次写或擦操作前必须先发写使能指令，使 WEL 位置 1。
+
+调试过程中发现一个关键时序问题：W25Q64FV 数据手册规定，写使能或擦除命令结束（CS 拉高）到下一条命令开始（CS 拉低）之间，必须满足最小间隔 \textbf{tSHSL = 50\,ns}。原始代码中 CS 拉高后立即进行下一次操作，间隔仅约 30\,ns，导致芯片静默拒绝所有写/擦命令，而 WEL 位保持置 1（即芯片拒绝命令时不清除 WEL，可作为失败诊断依据）。修复方法是在每次 CS 拉高之后插入 \texttt{HAL\_Delay(1)}（1\,ms，远大于最低要求）。
+
+PID 参数以 8 个 float（32\,字节）存储在扇区 0（地址 \texttt{0x000000}）：首位为魔数（\texttt{12345.678f}），其后依次为速度外环和电流内环的六个 PID 增益。每次上电时 \texttt{PID\_LoadFromFlash()} 自动执行，读取魔数，匹配则直接加载参数，无需手动操作。
 
 \subsection{SPI2 — FPGA 通信协议}
 
@@ -688,6 +692,10 @@ SPI 从机产生的 \texttt{duty\_valid} 选通信号仅在帧边界处更新 \t
         零点 ADC 漂移 &
             电机在零点附近抖转 &
             电位器零点偏置约 9 个 ADC 计数；加入死区（ADC $<50 \Rightarrow$ 给定 $=0$）。 \\
+        \addlinespace
+        Flash 写入静默失败 &
+            \texttt{save} 显示成功，断电后参数丢失；回读返回 \texttt{0xFFFFFFFF} &
+            tSHSL 时序违反：CS 拉高到下一条命令 CS 拉低间隔约 30\,ns，低于数据手册规定的 50\,ns 最小值。芯片静默丢弃命令，WEL 位保持置 1 可作为诊断依据。修复：在每次 CS 拉高后插入 \texttt{HAL\_Delay(1)}。 \\
         \bottomrule
     \end{tabular}
 \end{table}
@@ -745,13 +753,13 @@ SPI 从机产生的 \texttt{duty\_valid} 选通信号仅在帧边界处更新 \t
     \item FPGA PWM 频率实测 12.207\,kHz，与理论值一致
     \item 空载电流传感验证（约 30\,mA）
     \item 所有寄存器级驱动完成编写与验证
+    \item W25Q64 Flash PID 参数非易失性存储，断电后上电自动加载
 \end{itemize}
 
 后续工作包括：
 \begin{itemize}
-    \item 接线并验证 W25Q64 Flash 芯片的读写功能
-    \item 带负载条件下的电流内环测试
-    \item 不同负载条件下的 PID 参数优化
+    \item 带负载条件下的电流内环动态响应测试
+    \item 根据带载测试结果对 PID 参数进行重新整定（如有必要）
 \end{itemize}
 
 % ════════════════════════════════════════════════════════════════════════════

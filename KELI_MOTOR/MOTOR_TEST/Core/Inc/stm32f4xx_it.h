@@ -27,12 +27,13 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "pid.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-
+extern PID_TypeDef speed_pid;
+extern PID_TypeDef current_pid;
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/

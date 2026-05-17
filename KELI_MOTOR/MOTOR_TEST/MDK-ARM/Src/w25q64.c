@@ -10,10 +10,19 @@
  * bit0 BUSY : 1=器件正在执行内部操作，0=就绪
  * bit1 WEL  : 写使能锁存，WriteEnable后为1，写/擦完成后自动清0
  */
-static uint8_t W25Q64_ReadSR1(void) {
+uint8_t W25Q64_ReadSR1(void) {
     uint8_t sr;
     FLASH_CS_LOW();
     SPI1_ReadWriteByte(W25X_ReadStatusReg1);
+    sr = SPI1_ReadWriteByte(0xFF);
+    FLASH_CS_HIGH();
+    return sr;
+}
+
+uint8_t W25Q64_ReadSR2(void) {
+    uint8_t sr;
+    FLASH_CS_LOW();
+    SPI1_ReadWriteByte(W25X_ReadStatusReg2);   /* 0x35 */
     sr = SPI1_ReadWriteByte(0xFF);
     FLASH_CS_HIGH();
     return sr;
@@ -36,10 +45,11 @@ static void W25Q64_Wait_Busy(void) {
  * 正确顺序：Wait_Busy → Write_Enable → 写/擦/写SR 指令
  */
 static void W25Q64_Write_Enable(void) {
-    HAL_Delay(1);   /* tSHSL: 确保上一个 CS HIGH 到本次 CS LOW 间隔 >= 100ns */
+    HAL_Delay(1);   /* tSHSL: 上一事务结束 → 本次 CS LOW 间隔 >= 100ns */
     FLASH_CS_LOW();
     SPI1_ReadWriteByte(W25X_WriteEnable);
     FLASH_CS_HIGH();
+    HAL_Delay(1);   /* tSHSL: WREN 结束 → 下一命令 CS LOW 间隔 >= 100ns */
 }
 
 /* ========================================================================
@@ -96,6 +106,7 @@ void W25Q64_Erase_Sector(uint32_t addr) {
     SPI1_ReadWriteByte((uint8_t)(addr >> 8));  /* A15-A8  */
     SPI1_ReadWriteByte((uint8_t)(addr));       /* A7-A0   */
     FLASH_CS_HIGH();
+    HAL_Delay(1);              /* tSHSL: Erase→ReadSR 间隔 ≥ 50ns，加 1ms 留足余量 */
     W25Q64_Wait_Busy();        /* 等待擦除完成，max 400ms */
 }
 
@@ -119,6 +130,7 @@ void W25Q64_Write_4Floats(uint32_t addr, float *pf) {
         SPI1_ReadWriteByte(p[i]);
     }
     FLASH_CS_HIGH();
+    HAL_Delay(1);              /* tSHSL: PageProgram→ReadSR 间隔 ≥ 50ns */
     W25Q64_Wait_Busy();        /* 等待页编程完成，max 3ms */
 }
 

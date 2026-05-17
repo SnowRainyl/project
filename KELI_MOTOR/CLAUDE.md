@@ -72,7 +72,7 @@ KELI_MOTOR/
 
 ---
 
-## 当前功能状态（截至 2026-04-26）
+## 当前功能状态（截至 2026-05-12）
 
 ### 已验证 ✅
 
@@ -85,12 +85,12 @@ KELI_MOTOR/
 | 串级 PID 闭环 | 速度 0~100 RPM 平滑可控，无振荡 |
 | 串口调试 | CH340G 接 PA2/PA3，COM12，115200 稳定收发 |
 | SPI1 自回环 | MOSI 短接 MISO 测试 PASS |
+| **Flash W25Q64 读写持久化** | ID=0xEF16，PID 参数 save→断电→上电自动加载，全链路验证通过 |
 
 ### 待解决 ❌
 
 | 问题 | 现象 | 排查方向 |
 |------|------|----------|
-| **Flash W25Q64 未接线** | ID=0xFFFF（MISO 悬空浮高） | 先接线再验证，不是驱动 bug |
 | **SPI2 自回环 FAIL（已定位根因）** | RX 全为 0x00 | `spi_slave.vhd` 第47行 `miso <= '0'` 硬编码拉低，FPGA 上电后持续驱动 MISO=0V，与自回环短接线信号争夺并获胜。**实际电机控制不受影响**（SPI2 是单向写，FPGA 不需要回传数据）。验证方法：拔掉 J3-26（FPGA MISO 线），再做短接自回环应 PASS；或直接用示波器测 J3-31 PWM 占空比随电位器变化来确认端到端正常。 |
 | 电流环带负载测试 | 仅空载测试过 | 加负载后观察内环响应 |
 
@@ -164,15 +164,17 @@ I (mA)  = V_shunt / (50 × 0.1Ω)                ← 增益50V/V, 采样电阻0.
 | ADC 死区 | 电位器归零时 adc≈9，不加死区会导致积分累积偶发抖转 |
 | AX309 FPGA 工具链 | Spartan-6 **只能用 ISE 14.7**，不支持 Vivado；烧录用 iMPACT JTAG，断电丢失 |
 | Flash ID=0xFFFF | **MISO 未接线**时必然全 FF，不是驱动问题，先接线 |
+| Flash 写入静默失败 | 接线后 save 显示成功但掉电丢失，回读 raw=FFFFFFFF，擦除后 WEL=1 stuck → 根因是 **tSHSL 时序违反**（CS↑ 到下一条 CS↓ 间隔 < 50ns，芯片静默拒绝写/擦命令）；修复：在 Write_Enable / Erase_Sector / Write_4Floats 的 CS↑ 后加 `HAL_Delay(1)` |
 | SPI2 自回环不能带 FPGA 测 | `spi_slave.vhd` 的 `miso <= '0'` 让 FPGA 持续驱动 MISO=0V；做自回环必须先拔掉 J3-26 那根线断开 FPGA MISO；正常使用时 SPI2 是单向写，MISO 线可以不接 |
 
 ---
 
 ## 下一步工作（优先级排序）
 
-1. **接 W25Q64 Flash 的物理线**（SPI1：PB9=CS, PB10=SCK, PB14=MISO, PB15=MOSI 待确认），然后用 w25q64.c 验证 ReadID
-2. **重新烧录 FPGA** → 再测 SPI2 STM32→FPGA 通信（自回环用 PB14 短接 PB15）
-3. **带负载测试电流环**，观察内环对扰动的抑制效果，必要时重新整定参数
+1. **带负载测试电流环**，观察内环对扰动的抑制效果，必要时重新整定参数
+2. **重新烧录 FPGA** → 再测 SPI2 STM32→FPGA 通信（自回环用 PB14 短接 PB15，需先拔掉 J3-26）
+
+> ~~接 W25Q64 Flash 物理线并验证 ReadID~~ ← **已完成**（2026-05-12）：ID=0xEF16，tSHSL 时序修复后读写/持久化全部验证通过
 
 ---
 

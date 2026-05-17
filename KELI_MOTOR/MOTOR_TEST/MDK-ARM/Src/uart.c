@@ -106,6 +106,19 @@ void UART_SendString(const char *str) {
     }
 }
 
+uint8_t UART_RecvChar(char *c) {
+    uint32_t sr = USART2->SR;
+    if (sr & (1 << 3)) {           /* ORE: 溢出错误，读SR再读DR清除 */
+        (void)USART2->DR;
+        return 0;
+    }
+    if (sr & (1 << 5)) {           /* RXNE: 接收数据寄存器非空 */
+        *c = (char)(USART2->DR & 0xFF);
+        return 1;
+    }
+    return 0;
+}
+
 void UART_SendInt(int val) {
     char buf[12];
     int i = 0;

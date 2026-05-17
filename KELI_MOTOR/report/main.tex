@@ -245,7 +245,7 @@ Table~\ref{tab:mcu_periph}.
         TIM6     & 1\,kHz PID control interrupt & APB1 84\,MHz \\
         TIM3     & Quadrature encoder interface & APB1 84\,MHz \\
         ADC1     & Potentiometer + current sensing & APB2 21\,MHz \\
-        SPI1     & W25Q64 Flash (not yet wired) & APB2 5.25\,MHz \\
+        SPI1     & W25Q64 Flash (verified, ID = 0xEF16) & APB2 5.25\,MHz \\
         SPI2     & FPGA duty cycle transmission & APB1 5.25\,MHz \\
         I2C1     & OLED SSD1306 display & APB1 100\,kHz \\
         USART2   & Serial debug (CH340G) & APB1 115200 baud \\
@@ -433,9 +433,31 @@ are set to 84 cycles for the high-impedance potentiometer channel (IN0) and
 
 \subsection{SPI1 — W25Q64 Flash Storage}
 
-% TODO: W25Q64 指令集，ReadID，Page Program，Sector Erase
-[Describe SPI1 configuration and W25Q64 command protocol. Note: chip not
-yet physically wired; driver validated via SPI1 loopback test (PASS).]
+SPI1 is configured at APB2/8 = 5.25\,MHz, Mode 0, 8-bit MSB-first, with
+PA4 as a software chip-select. The W25Q64FV (8\,MB NOR Flash, JEDEC ID
+\texttt{0xEF16}) is used to store PID parameters across power cycles.
+
+The key operations used are Sector Erase (0x20, 4\,KB, $t_{SE}$ max
+400\,ms) and Page Program (0x02, 256\,bytes, $t_{PP}$ max 3\,ms), each
+preceded by a Write Enable command (0x06). A critical timing requirement
+from the datasheet is:
+
+\begin{quote}
+\textbf{tSHSL} (\texttt{/CS} deselect time, erase/program $\to$ read
+status register): minimum \textbf{50\,ns}.
+\end{quote}
+
+Violating this caused the chip to silently reject all write and erase
+commands, with the Write Enable Latch (WEL bit) remaining set as the
+diagnostic indicator. The fix was to insert a 1\,ms delay
+(\texttt{HAL\_Delay(1)}) after every \texttt{CS\,\textuparrow} before
+issuing the next command.
+
+Eight floats (32\,bytes) are stored at sector 0 (\texttt{0x000000}):
+a magic number for validity check, followed by the six PID gains
+($K_p$, $K_i$, $K_d$ for each loop). On every power-up,
+\texttt{PID\_LoadFromFlash()} reads the magic number; if it matches, the
+saved parameters are applied automatically without any serial command.
 
 \subsection{SPI2 — FPGA Communication Protocol}
 
@@ -717,6 +739,15 @@ development and their resolutions.
             Motor twitches at rest &
             Potentiometer offset $\approx9$ ADC counts; dead zone
             (ADC $<50 \Rightarrow$ setpoint $=0$) applied. \\
+        \addlinespace
+        Flash write silently ignored &
+            \texttt{save} reported success but parameters lost on reboot;
+            readback returned \texttt{0xFFFFFFFF} &
+            tSHSL timing violation: \texttt{/CS} deselect time after Write
+            Enable / Erase commands was $\approx$30\,ns, below the 50\,ns
+            minimum. Chip discards the command but WEL stays set, masking
+            the failure. Fixed by adding 1\,ms delay after each
+            \texttt{CS\,\textuparrow}. \\
         \bottomrule
     \end{tabular}
 \end{table}
@@ -783,13 +814,15 @@ Key achievements include:
     \item PWM generation accuracy confirmed at 12.207\,kHz
     \item Current sensing validated at no-load ($\approx30$\,mA)
     \item All register-level drivers written and verified
+    \item Non-volatile PID parameter storage via W25Q64 Flash,
+          with automatic load on power-up
 \end{itemize}
 
 Remaining work includes:
 \begin{itemize}
-    \item Physical wiring and verification of the W25Q64 Flash chip
-    \item Load testing of the current inner loop
-    \item Optimisation of PID parameters under varying load conditions
+    \item Load testing of the current inner loop under varying mechanical
+          load conditions
+    \item Re-tuning of PID parameters if load testing reveals instability
 \end{itemize}
 
 % ════════════════════════════════════════════════════════════════════════════

@@ -44,4 +44,10 @@ void W25Q64_Write_4Floats(uint32_t addr, float *pf);
 /* 读取4个float (16字节) */
 void W25Q64_Read_4Floats(uint32_t addr, float *pf);
 
+/* 读状态寄存器1 (BUSY=bit0, WEL=bit1, BP[2:0]=bit4:2) */
+uint8_t W25Q64_ReadSR1(void);
+
+/* 读状态寄存器2 (SRP1=bit0, QE=bit1, LB[1:3]=bit2:4, CMP=bit6) */
+uint8_t W25Q64_ReadSR2(void);
+
 #endif /* __W25Q64_H */

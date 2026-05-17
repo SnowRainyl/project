@@ -432,3 +432,179 @@ float duty_f = PID_Calc(&motor_pid, (float)setpoint, (float)encoder_speed);
 | `main.c`       | `Core/Src/` | 初始化调用 + 监控打印 |
 
 > **Keil 注意**：`adc_reg.c` 和 `pid.c` 需手动添加到工程文件组。
+
+---
+
+## 十、W25Q64 Flash 驱动与 PID 参数持久化
+
+### 10.1 硬件资源
+
+| 引脚 | 功能 | 说明 |
+|---|---|---|
+| PA4 | SPI1_CS（软件 NSS） | GPIO 输出，手动控制片选 |
+| PA5 | SPI1_SCK（AF5） | SPI1 时钟 |
+| PA6 | SPI1_MISO（AF5） | Flash → MCU 数据 |
+| PA7 | SPI1_MOSI（AF5） | MCU → Flash 数据 |
+
+芯片：**W25Q64FV**，8MB NOR Flash，JEDEC ID = `0xEF16`（厂商 0xEF，设备 0x16）。
+
+### 10.2 驱动接口（`w25q64.h / w25q64.c`）
+
+| 函数 | 说明 |
+|---|---|
+| `W25Q64_ReadID()` | 发 0x90 指令读厂商+设备ID，正常返回 `0xEF16` |
+| `W25Q64_Unprotect()` | 写 SR1=0x00, SR2=0x00，解除全片写保护 |
+| `W25Q64_Erase_Sector(addr)` | 4KB 扇区擦除（指令 0x20），tSE max 400ms |
+| `W25Q64_Write_4Floats(addr, pf)` | 页编程写入 4 个 float（16字节），指令 0x02 |
+| `W25Q64_Read_4Floats(addr, pf)` | 标准读（指令 0x03）读取 4 个 float |
+| `W25Q64_ReadSR1()` | 读状态寄存器1：bit0=BUSY，bit1=WEL |
+| `W25Q64_ReadSR2()` | 读状态寄存器2：bit6=CMP，bit1=QE |
+
+内部辅助函数（`static`）：
+
+- `W25Q64_Wait_Busy()`：轮询 SR1.BUSY 直到为 0，设有 200000 次超时
+- `W25Q64_Write_Enable()`：发 WriteEnable（0x06），使 WEL=1
+
+### 10.3 PID 参数存储格式
+
+Flash 扇区 0（地址 `0x000000`），存储 8 个 float（32 字节，跨两个 16 字节页编程事务）：
+
+```
+offset  0: magic     = 12345.678f   ← 标识符，全擦后值为 0xFFFFFFFF，不等于 magic
+offset  4: speed_kp
+offset  8: speed_ki
+offset 12: speed_kd
+offset 16: current_kp
+offset 20: current_ki
+offset 24: current_kd
+offset 28: 0.0f（保留）
+```
+
+上电时 `PID_LoadFromFlash()` 自动执行，读 magic，匹配则加载参数，否则打印"使用默认值"。无需手动发 `load` 命令。
+
+串口命令：
+
+| 命令 | 功能 |
+|---|---|
+| `save` | 将当前 kp/ki/kd 写入 Flash，附带回读验证 |
+| `load` | 从 Flash 手动重新加载（上电已自动执行） |
+| `show` | 打印当前内存中的 PID 参数 |
+| `set sp/si/sd <val>` | 修改速度外环 kp/ki/kd |
+| `set cp/ci/cd <val>` | 修改电流内环 kp/ki/kd |
+
+### 10.4 排查过程：写入静默失败
+
+#### 现象
+
+发 `save` 后串口输出"已保存到Flash"，但断电重启后 `load` 显示"Flash无有效参数，使用默认值"。
+
+#### 第一步：加回读验证
+
+在 `PID_SaveToFlash` 写完后立即 `W25Q64_Read_4Floats` 回读，打印实际读回的 float 值和原始 hex：
+
+```
+[PID] Flash写入失败！readback=nan raw=FFFFFFFF
+```
+
+`0xFFFFFFFF` 是 NOR Flash 擦除态默认值，说明**写入从未真正发生**，不是掉电丢失的问题。
+
+#### 第二步：WEL 诊断
+
+写入前/后分别读 SR1，观察 WEL 位（bit1）：
+
+- 正常流程：`Write_Enable` → WEL=1 → 发 Erase 指令 → 擦除开始 → BUSY 结束 → **WEL 自动清 0**
+- 异常现象：擦除命令发出后，`SR1 = 0x02`（**WEL=1 保持**）
+
+**WEL=1 stuck 的含义**：WEL 只在成功接受并完成一次写/擦操作后才清 0。WEL 未清说明芯片**拒绝接受了擦除命令**，操作被静默忽略。
+
+同样现象出现在启动测试的扇区 1 擦除上，说明问题不限于某个地址，而是系统性失败。
+
+#### 第三步：排查 SR2=0x3E
+
+读出 SR2 = `0x3E`：
+
+```
+bit7: SUS=0
+bit6: CMP=0
+bit5: LB3=1  ← OTP 安全寄存器锁位（一次性写入）
+bit4: LB2=1
+bit3: LB1=1
+bit2: 保留=1
+bit1: QE=1   ← Quad Enable（禁用 /HOLD 引脚）
+bit0: SRP1=0
+```
+
+LB1~LB3=1 是 OTP 安全寄存器永久锁定位，**不影响主 Flash 阵列的读写**，只保护安全寄存器区域（256字节）。CMP=0、BP=000，无块保护。**SR2=0x3E 不是写失败的原因**。
+
+#### 第四步：定位根因——tSHSL 时序违反
+
+查阅 W25Q64FV Datasheet §7.6 AC 电气特性，找到关键参数：
+
+> **tSHSL**（/CS Deselect Time，for Erase or Program → Read Status Registers）= **50 ns 最小值**
+
+即：发完 WREN 指令（CS↑）到紧接着发 Erase 命令（CS↓）之间，必须至少等待 50ns。同理，发完 Erase 命令（CS↑）到紧接着读 SR1（CS↓）也需要 50ns。
+
+原代码中没有任何延迟：
+
+```c
+// 原 Write_Enable（违反 tSHSL）
+FLASH_CS_LOW();
+SPI1_ReadWriteByte(W25X_WriteEnable);
+FLASH_CS_HIGH();
+// ← 0 延迟，立刻返回到调用处发下一条命令（CS↓ ~30ns 后）
+```
+
+STM32F407 @ 168MHz，一条指令 ~6ns，几条语句下来 CS 间隔约 30ns，不足 50ns。W25Q64 检测到违反时序，**静默丢弃了后续的写/擦命令**，但 WEL 仍维持，看起来像"写入成功了但其实没有"。
+
+#### 修复方案
+
+在 CS↑ 和下一条命令之间加 `HAL_Delay(1)`（1ms，远大于 50ns 最小值）：
+
+**`W25Q64_Write_Enable`**（修复 WREN→下一命令 间隔）：
+
+```c
+static void W25Q64_Write_Enable(void) {
+    HAL_Delay(1);   /* tSHSL: 上一事务结束 → 本次 CS LOW 间隔 >= 100ns */
+    FLASH_CS_LOW();
+    SPI1_ReadWriteByte(W25X_WriteEnable);
+    FLASH_CS_HIGH();
+    HAL_Delay(1);   /* tSHSL: WREN 结束 → 下一命令 CS LOW 间隔 >= 100ns */
+}
+```
+
+**`W25Q64_Erase_Sector`**（修复 Erase→ReadSR1 间隔）：
+
+```c
+FLASH_CS_HIGH();
+HAL_Delay(1);              /* tSHSL: Erase→ReadSR 间隔 ≥ 50ns */
+W25Q64_Wait_Busy();        /* 等待擦除完成，max 400ms */
+```
+
+**`W25Q64_Write_4Floats`**（修复 PageProgram→ReadSR1 间隔）：
+
+```c
+FLASH_CS_HIGH();
+HAL_Delay(1);              /* tSHSL: PageProgram→ReadSR 间隔 ≥ 50ns */
+W25Q64_Wait_Busy();        /* 等待页编程完成，max 3ms */
+```
+
+> `HAL_Delay` 可用的原因：`main()` 中 `HAL_Init()` 已初始化 SysTick，项目其余驱动用寄存器级编写，但共用这一个毫秒计时基础设施，无冲突。
+
+### 10.5 验证结果
+
+修复后串口输出：
+
+```
+[Flash] Erase done  SR1=0x00 WEL=0(OK)
+[PID] SR1=0x00 SR2=0x3E (WEL=0 BP=0 CMP=0 SRP1=0)
+[PID] 已保存到Flash（验证OK，sp_kp=1.5000）
+```
+
+断电重启后自动输出：
+
+```
+[PID] Flash magic=12345.6777 raw=8FC6464A
+[PID] 已从Flash加载参数
+```
+
+参数持久化完整验证通过。
