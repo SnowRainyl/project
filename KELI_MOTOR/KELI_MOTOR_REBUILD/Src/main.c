@@ -22,6 +22,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "uart.h"
+#include "spi_Reg.h"
+#include "w25q64.h"
 
 /* USER CODE END Includes */
 
@@ -54,6 +56,16 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void PrintHex16(uint16_t value)
+{
+  static const char hex[] = "0123456789ABCDEF";
+
+  UART_SendString("0x");
+  UART_SendChar(hex[(value >> 12) & 0x0FU]);
+  UART_SendChar(hex[(value >> 8) & 0x0FU]);
+  UART_SendChar(hex[(value >> 4) & 0x0FU]);
+  UART_SendChar(hex[value & 0x0FU]);
+}
 
 /* USER CODE END 0 */
 
@@ -88,6 +100,10 @@ int main(void)
   /* USER CODE BEGIN 2 */
   UART_Init();
   UART_SendString("\r\n[KELI_MOTOR_REBUILD] UART ready\r\n");
+  SPI1_Flash_Init();
+  UART_SendString("[KELI_MOTOR_REBUILD] W25Q64 ID = ");
+  PrintHex16(W25Q64_ReadID());
+  UART_SendString("\r\n");
 
   /* USER CODE END 2 */
 

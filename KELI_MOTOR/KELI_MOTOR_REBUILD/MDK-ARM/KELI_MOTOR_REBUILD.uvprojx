@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Inc;../BSP/uart/include;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include</IncludePath>
+              <IncludePath>../Inc;../BSP/uart/include;../BSP/spi/include;../BSP/flash/include;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -413,6 +413,16 @@
               <FileName>uart.c</FileName>
               <FileType>1</FileType>
               <FilePath>../BSP/uart/src/uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>spi_Reg.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../BSP/spi/src/spi_Reg.c</FilePath>
+            </File>
+            <File>
+              <FileName>w25q64.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../BSP/flash/src/w25q64.c</FilePath>
             </File>
           </Files>
         </Group>
