@@ -34,6 +34,7 @@ extern "C" {
 /* USER CODE BEGIN ET */
 extern PID_TypeDef speed_pid;
 extern PID_TypeDef current_pid;
+extern volatile float g_current_setpoint_mA;
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/

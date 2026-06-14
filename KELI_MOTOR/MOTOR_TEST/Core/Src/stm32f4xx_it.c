@@ -39,6 +39,12 @@
 /* 电位器满量程对应的目标转速上限（RPM）。
  * 电机铭牌额定 280 RPM，此处限速 100 RPM（约 36% 额定转速）。 */
 #define MOTOR_MAX_RPM           100.0f
+#define MOTOR_MIN_RUN_RPM       15.0f
+#define MOTOR_STOP_ADC_MAX      250U
+#define MOTOR_START_ADC_MIN     350U
+#define SPEED_LOOP_DIVIDER      10U
+#define DUTY_SLEW_PER_MS        2U
+#define DUTY_STOP_SLEW_PER_MS   4U
 
 /**
  * 速度外环输出的最大电流给定值（mA）
@@ -60,6 +66,7 @@ PID_TypeDef speed_pid;    /* 速度外环：setpoint=RPM → output=电流给定
 PID_TypeDef current_pid;  /* 电流内环：setpoint=mA  → output=PWM占空比     */
 volatile uint16_t  g_pid_duty = 0;   /* 供 main.c 读取，用于串口/OLED 显示 */
 volatile uint16_t  g_adc_val  = 0;   /* 电位器原始 ADC 值（0~4095） */
+volatile float g_current_setpoint_mA = 0.0f;
 
 uint16_t sendtofpga;
 /* USER CODE END PV */
@@ -114,15 +121,15 @@ void Motor_Control_Init(void)
      *   实测电流范围：75mA（最低速）~ 135mA（最高速）
      *   out_max = MOTOR_MAX_CURRENT_MA = 150mA
      *
-     *   kp=1.5 → 100RPM 误差时 P 项 = 150mA（恰好满量程，依赖 anti-windup 限幅）
-     *   ki=0.1 → 稳态 100RPM 所需积分 = 100mA/0.1 = 1000 < integral_max=1500 ✓
+     *   kp=0.8 → 兼顾启动响应与测速量化误差
+     *   ki=0.01 → 加快消除稳态转速误差，同时避免低频振荡
      *   kd=0.0 → 编码器信号含噪，省略微分
-     *   integral_max = out_max / ki = 150 / 0.1 = 1500
+     *   integral_max = out_max / ki = 400 / 0.01 = 40000
      */
     PID_Init(&speed_pid,
-             /*kp*/1.5f,  /*ki*/0.1f,  /*kd*/0.0f,
+             /*kp*/0.8f,  /*ki*/0.01f,  /*kd*/0.0f,
              /*out_min*/0.0f,  /*out_max*/MOTOR_MAX_CURRENT_MA,
-             /*integral_max*/4000.0f);  /* integral_max = out_max / ki = 400/0.1 */
+             /*integral_max*/40000.0f);
 
     /*
      * 电流内环（Current Loop）
@@ -302,27 +309,110 @@ void SysTick_Handler(void)
  * ============================================================================= */
 void TIM6_DAC_IRQHandler(void)
 {
+    static uint8_t speed_loop_count = 0U;
+    static uint8_t motor_enabled = 0U;
+    static uint16_t duty_applied = 0U;
+
     if (TIM6->SR & TIM_SR_UIF) {
+        uint8_t speed_loop_due = 0U;
+
         TIM6->SR &= ~TIM_SR_UIF;    /* 清除更新中断标志（必须第一时间清） */
 
-        /* 1. 更新编码器（计算 g_encoder_rpm） */
-        Encoder_Update();
-
-        /* 2. 读取电位器，映射为目标转速（0~4095 → 0~MOTOR_MAX_RPM RPM） */
+        /* 1. 读取电位器，映射为目标转速（0~4095 → 0~MOTOR_MAX_RPM RPM） */
         uint16_t adc_val      = ADC1_Read_Filtered();
         g_adc_val             = adc_val;
-        float    setpoint_rpm = (adc_val < 50U) ? 0.0f
-                             : (float)adc_val * (MOTOR_MAX_RPM / 4095.0f);
+        float setpoint_rpm = 0.0f;
+        if (adc_val >= MOTOR_START_ADC_MIN) {
+            setpoint_rpm = MOTOR_MIN_RUN_RPM
+                         + (float)(adc_val - MOTOR_START_ADC_MIN)
+                           * ((MOTOR_MAX_RPM - MOTOR_MIN_RUN_RPM)
+                              / (4095.0f - (float)MOTOR_START_ADC_MIN));
+        }
 
-        /* 3. 速度外环 PID → 期望电流（mA） */
-        float current_setpoint = PID_Calc(&speed_pid, setpoint_rpm, g_encoder_rpm);
-
-        /* 4. 读取 INA240 实测电流（8 点滤波，同步更新 g_motor_current_mA） */
+        /* 2. 电流内环仍以 1kHz 采样 */
         float measured_current = ADC1_ReadCurrent_Filtered_mA();
 
-        /* 5. 电流内环 PID → PWM 占空比（0~4095） */
-        float    duty_f = PID_Calc(&current_pid, current_setpoint, measured_current);
-        uint16_t duty   = (uint16_t)duty_f;
+        /* 编码器始终保持同步；每 10ms 产生一次速度外环节拍。 */
+        speed_loop_count++;
+        if (speed_loop_count >= SPEED_LOOP_DIVIDER) {
+            speed_loop_count = 0U;
+            Encoder_Update();
+            speed_loop_due = 1U;
+        }
+
+        /* 启停滞回，避免电位器零位噪声导致电机间歇启动。 */
+        if (motor_enabled == 0U) {
+            if (adc_val >= MOTOR_START_ADC_MIN) {
+                motor_enabled = 1U;
+            }
+        } else if (adc_val <= MOTOR_STOP_ADC_MAX) {
+            motor_enabled = 0U;
+        }
+
+        /*
+         * 电位器位于零区时直接停机。
+         * 若仍运行电流 PID，零点噪声产生的负电流会形成正误差，导致 2%~10% duty 自激。
+         */
+        uint16_t duty;
+        if (motor_enabled == 0U) {
+            PID_Reset(&speed_pid);
+            PID_Reset(&current_pid);
+            g_current_setpoint_mA = 0.0f;
+
+            /*
+             * 进入死区后平滑减小占空比，避免扭矩瞬间消失造成机械卡顿。
+             * duty 降到 0 后仍保持真正停机，不在死区内持续驱动。
+             */
+            if (duty_applied > DUTY_STOP_SLEW_PER_MS) {
+                duty_applied -= DUTY_STOP_SLEW_PER_MS;
+            } else {
+                duty_applied = 0U;
+            }
+            duty = duty_applied;
+
+            if (duty_applied == 0U && g_encoder_rpm > -0.5f && g_encoder_rpm < 0.5f) {
+                g_motor_current_mA = 0.0f;
+            }
+
+        } else {
+            if (setpoint_rpm < MOTOR_MIN_RUN_RPM) {
+                setpoint_rpm = MOTOR_MIN_RUN_RPM;
+            }
+
+            /*
+             * 编码器测速和速度外环降至 100Hz。
+             * 1ms 窗口内一个计数约等于 40RPM，过于离散；10ms 窗口可显著降低量化跳变。
+             */
+            if (speed_loop_due != 0U) {
+                g_current_setpoint_mA = PID_Calc(&speed_pid, setpoint_rpm, g_encoder_rpm);
+            }
+
+            /* 3. 电流内环 PID → PWM 占空比（0~4095） */
+            uint16_t duty_target;
+            if (g_current_setpoint_mA <= 0.0f) {
+                PID_Reset(&current_pid);
+                duty_target = 0U;
+            } else {
+                float duty_f = PID_Calc(&current_pid,
+                                       g_current_setpoint_mA,
+                                       measured_current);
+                duty_target = (uint16_t)duty_f;
+            }
+
+            /*
+             * 限制占空比每毫秒的变化量，避免电流采样纹波直接变成扭矩冲击。
+             * 当前设置从 0 到满占空比约需 2 秒。
+             */
+            if (duty_target > duty_applied + DUTY_SLEW_PER_MS) {
+                duty_applied += DUTY_SLEW_PER_MS;
+            } else if (duty_target + DUTY_SLEW_PER_MS < duty_applied) {
+                duty_applied -= DUTY_SLEW_PER_MS;
+            } else {
+                duty_applied = duty_target;
+            }
+            duty = duty_applied;
+        }
+
         sendtofpga = duty;
 //duty = 1000;
         /* 6. 通过 SPI2 发给 FPGA（2字节，12bit 占空比） */
