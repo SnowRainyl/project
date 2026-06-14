@@ -32,6 +32,7 @@
 #include "spi_Reg.h"
 #include "w25q64.h"
 #include "adc_reg.h"
+#include "motor_fsm.h"
 
 /* 来自 stm32f4xx_it.c 的外部符号 */
 extern void              Motor_Control_Init(void);
@@ -377,23 +378,29 @@ int main(void)
 
     /* ---- 第二步：没有命令活动时才打印 RPM / 刷新 OLED（5Hz） ---- */
     if (!rx_active) {
-        uint16_t curr_raw = g_motor_current_raw;
-        float display_rpm = (g_pid_duty == 0U || (g_encoder_rpm > -0.05f && g_encoder_rpm < 0.05f))
-                          ? 0.0f : g_encoder_rpm;
-        float display_current = (g_motor_current_mA < 0.05f) ? 0.0f : g_motor_current_mA;
+        /* 一次性取整组遥测，保证下面所有字段（含 curr_raw）来自同一个控制周期 */
+        MotorTelemetry t;
+        Motor_GetTelemetry(&t);
+
+        float display_rpm = (t.duty == 0U || (t.rpm > -0.05f && t.rpm < 0.05f))
+                          ? 0.0f : t.rpm;
+        float display_current = (t.current_mA < 0.05f) ? 0.0f : t.current_mA;
         snprintf(uart_buf, sizeof(uart_buf),
-                 "RPM=%.1f  duty=%4u (%.1f%%)  adc=%4u  curr_raw=%4u  iset=%.1fmA  curr=%.1fmA\r\n",
+                 "[%-5s] set=%.1f setR=%.1f RPM=%.1f duty=%4u (%.1f%%) adc=%4u raw=%4u iset=%.1fmA curr=%.1fmA\r\n",
+                 Motor_State_Name(t.state),
+                 (double)t.rpm_set,
+                 (double)t.rpm_set_ramped,
                  (double)display_rpm,
-                 g_pid_duty, (double)g_pid_duty / 40.95,
-                 g_adc_val, curr_raw,
-                 (double)g_current_setpoint_mA,
+                 t.duty, (double)t.duty / 40.95,
+                 t.pot_adc, t.current_raw,
+                 (double)t.current_set_mA,
                  (double)display_current);
         UART_SendString(uart_buf);
 
         char oled_buf[22];
-        snprintf(oled_buf, sizeof(oled_buf), "RPM:%-7.1f", (double)display_rpm);
+        snprintf(oled_buf, sizeof(oled_buf), "%-5s RPM:%-5.1f", Motor_State_Name(t.state), (double)display_rpm);
         OLED_ShowStr(0, 2, (uint8_t *)oled_buf, FontSize6x8, 0);
-        snprintf(oled_buf, sizeof(oled_buf), "Duty:%-6.1f%%", (double)g_pid_duty / 40.95);
+        snprintf(oled_buf, sizeof(oled_buf), "Duty:%-6.1f%%", (double)t.duty / 40.95);
         OLED_ShowStr(0, 4, (uint8_t *)oled_buf, FontSize6x8, 0);
         snprintf(oled_buf, sizeof(oled_buf), "Curr:%-6.1fmA", (double)display_current);
         OLED_ShowStr(0, 6, (uint8_t *)oled_buf, FontSize6x8, 0);
