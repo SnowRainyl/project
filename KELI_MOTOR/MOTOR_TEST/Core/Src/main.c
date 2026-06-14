@@ -84,6 +84,62 @@ static float pid_flash_buf[8];         /* [magic, sp_kp, sp_ki, sp_kd, cp_kp, cp
 static char    cmd_buf[64];
 static uint8_t cmd_len = 0;
 
+static uint8_t parse_float_arg(const char *cmd, const char *name, float *value) {
+    const char *p = cmd;
+    float result = 0.0f;
+    float scale = 0.1f;
+    uint8_t negative = 0U;
+    uint8_t has_digit = 0U;
+
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (strncmp(p, "set", 3U) != 0) {
+        return 0U;
+    }
+    p += 3;
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (p[0] != name[0] || p[1] != name[1]) {
+        return 0U;
+    }
+    p += 2;
+    if (*p != ' ' && *p != '\t') {
+        return 0U;
+    }
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (*p == '-' || *p == '+') {
+        negative = (*p == '-') ? 1U : 0U;
+        p++;
+    }
+    while (*p >= '0' && *p <= '9') {
+        result = result * 10.0f + (float)(*p - '0');
+        has_digit = 1U;
+        p++;
+    }
+    if (*p == '.') {
+        p++;
+        while (*p >= '0' && *p <= '9') {
+            result += (float)(*p - '0') * scale;
+            scale *= 0.1f;
+            has_digit = 1U;
+            p++;
+        }
+    }
+    while (*p != '\0' && ((uint8_t)*p <= 0x20U || (uint8_t)*p == 0x7FU)) {
+        p++;
+    }
+    if (has_digit == 0U || *p != '\0') {
+        return 0U;
+    }
+
+    *value = (negative != 0U) ? -result : result;
+    return 1U;
+}
+
 static void PID_SaveToFlash(void) {
     if (!flash_id_ok) {
         UART_SendString("[PID] Flash未连接，save跳过\r\n");
@@ -165,13 +221,13 @@ static void PID_LoadFromFlash(void) {
 static void handle_pid_cmd(const char *cmd) {
     float val;
     /* 速度外环 */
-    if      (sscanf(cmd, "set sp %f", &val) == 1) { speed_pid.kp = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_kp=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
-    else if (sscanf(cmd, "set si %f", &val) == 1) { speed_pid.ki = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_ki=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
-    else if (sscanf(cmd, "set sd %f", &val) == 1) { speed_pid.kd = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_kd=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    if      (parse_float_arg(cmd, "sp", &val)) { speed_pid.kp = val; PID_Reset(&speed_pid); snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_kp=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    else if (parse_float_arg(cmd, "si", &val)) { speed_pid.ki = val; PID_Reset(&speed_pid); snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_ki=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    else if (parse_float_arg(cmd, "sd", &val)) { speed_pid.kd = val; PID_Reset(&speed_pid); snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_kd=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
     /* 电流内环 */
-    else if (sscanf(cmd, "set cp %f", &val) == 1) { current_pid.kp = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_kp=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
-    else if (sscanf(cmd, "set ci %f", &val) == 1) { current_pid.ki = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_ki=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
-    else if (sscanf(cmd, "set cd %f", &val) == 1) { current_pid.kd = val; snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_kd=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    else if (parse_float_arg(cmd, "cp", &val)) { current_pid.kp = val; PID_Reset(&current_pid); snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_kp=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    else if (parse_float_arg(cmd, "ci", &val)) { current_pid.ki = val; PID_Reset(&current_pid); snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_ki=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
+    else if (parse_float_arg(cmd, "cd", &val)) { current_pid.kd = val; PID_Reset(&current_pid); snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_kd=%.4f\r\n", (double)val); UART_SendString(uart_buf); }
     /* 通用操作 */
     else if (strcmp(cmd, "save") == 0) { PID_SaveToFlash(); }
     else if (strcmp(cmd, "load") == 0) { PID_LoadFromFlash(); }
@@ -191,7 +247,8 @@ static void handle_pid_cmd(const char *cmd) {
                         "  load   read from Flash\r\n");
     }
     else if (cmd[0] != '\0') {
-        UART_SendString("[PID] unknown cmd, type 'help'\r\n");
+        snprintf(uart_buf, sizeof(uart_buf), "[PID] unknown cmd: <%s>\r\n", cmd);
+        UART_SendString(uart_buf);
     }
 }
 /* USER CODE END 0 */
@@ -220,9 +277,19 @@ int main(void)
 
   /* USER CODE BEGIN Init */
 	UART_Init();
+  UART_SendString("[FW] PID parser v2\r\n");
 	SPI1_Flash_Init();
 	SPI2_FPGA_Init();
 	ADC1_Init();
+
+  /* FPGA 可能在 MCU 复位期间保留旧 duty，校准电流零点前必须明确停机。 */
+  FPGA_CS_LOW();
+  SPI2_ReadWriteByte(0U);
+  SPI2_ReadWriteByte(0U);
+  FPGA_CS_HIGH();
+  HAL_Delay(100);
+  ADC1_CalibrateCurrentZero();
+
 	Motor_Control_Init();   /* TIM6 1kHz + PID 初始化，从此 PID 在中断里自动运行 */
   /* USER CODE END Init */
 
@@ -310,21 +377,25 @@ int main(void)
 
     /* ---- 第二步：没有命令活动时才打印 RPM / 刷新 OLED（5Hz） ---- */
     if (!rx_active) {
-        uint16_t curr_raw = ADC1_ReadChannel(1U);
+        uint16_t curr_raw = g_motor_current_raw;
+        float display_rpm = (g_pid_duty == 0U || (g_encoder_rpm > -0.05f && g_encoder_rpm < 0.05f))
+                          ? 0.0f : g_encoder_rpm;
+        float display_current = (g_motor_current_mA < 0.05f) ? 0.0f : g_motor_current_mA;
         snprintf(uart_buf, sizeof(uart_buf),
-                 "RPM=%.1f  duty=%4u (%.1f%%)  adc=%4u  curr_raw=%4u  curr=%.1fmA\r\n",
-                 (double)g_encoder_rpm,
+                 "RPM=%.1f  duty=%4u (%.1f%%)  adc=%4u  curr_raw=%4u  iset=%.1fmA  curr=%.1fmA\r\n",
+                 (double)display_rpm,
                  g_pid_duty, (double)g_pid_duty / 40.95,
                  g_adc_val, curr_raw,
-                 (double)g_motor_current_mA);
+                 (double)g_current_setpoint_mA,
+                 (double)display_current);
         UART_SendString(uart_buf);
 
         char oled_buf[22];
-        snprintf(oled_buf, sizeof(oled_buf), "RPM:%-7.1f", (double)g_encoder_rpm);
+        snprintf(oled_buf, sizeof(oled_buf), "RPM:%-7.1f", (double)display_rpm);
         OLED_ShowStr(0, 2, (uint8_t *)oled_buf, FontSize6x8, 0);
         snprintf(oled_buf, sizeof(oled_buf), "Duty:%-6.1f%%", (double)g_pid_duty / 40.95);
         OLED_ShowStr(0, 4, (uint8_t *)oled_buf, FontSize6x8, 0);
-        snprintf(oled_buf, sizeof(oled_buf), "Curr:%-6.1fmA", (double)g_motor_current_mA);
+        snprintf(oled_buf, sizeof(oled_buf), "Curr:%-6.1fmA", (double)display_current);
         OLED_ShowStr(0, 6, (uint8_t *)oled_buf, FontSize6x8, 0);
     }
 
