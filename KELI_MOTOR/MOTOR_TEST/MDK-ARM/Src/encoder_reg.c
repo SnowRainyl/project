@@ -31,7 +31,7 @@
  *
  * ─── 速度计算 ────────────────────────────────────────────────────────
  *
- *   Encoder_Update() 在 1kHz ISR 中每 1ms 调用一次：
+ *   Encoder_Update() 由 1kHz ISR 每 10 次调用一次，即 100Hz：
  *     delta  = (int16_t)(CNT_now - CNT_last)   ← 有符号 16 位减法
  *                                                  自动处理溢出回绕
  *     RPM    = delta × 60000 / ENCODER_COUNTS_PER_REV
@@ -215,15 +215,15 @@ void Encoder_Update(void)
     s_last_cnt = current_cnt;
 
     /*
-     * 速度计算（调用周期 = 1ms）：
+     * 速度计算（调用频率 = ENCODER_UPDATE_HZ）：
      *
-     *   delta [counts/ms]
-     *   × 60000 [ms/min]           ← 将 1/ms 换算到 1/min
+     *   delta [counts/sample]
+     *   × 60 × sample_hz
      *   ÷ ENCODER_COUNTS_PER_REV   ← 将 counts 换算到转
      *   = RPM（输出轴）
      */
     raw_rpm = (float)g_encoder_delta
-            * 60000.0f
+            * (60.0f * (float)ENCODER_UPDATE_HZ)
             / (float)ENCODER_COUNTS_PER_REV;
 
     g_encoder_rpm = RPM_Filter(raw_rpm);
