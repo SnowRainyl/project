@@ -22,5 +22,6 @@ void UART_SendString(const char *str);
 
 /* 非阻塞接收一个字节：有数据返回1并写入*c，否则返回0 */
 uint8_t UART_RecvChar(char *c);
+void USART2_IRQHandler(void);
 
 #endif /* UART_H */

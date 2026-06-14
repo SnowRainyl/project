@@ -28,6 +28,13 @@
 #include "uart.h"
 #include "stm32f4xx.h"
 
+#define UART_RX_BUFFER_SIZE 64U
+#define UART_RX_BUFFER_MASK (UART_RX_BUFFER_SIZE - 1U)
+
+static volatile uint8_t s_rx_buffer[UART_RX_BUFFER_SIZE];
+static volatile uint8_t s_rx_head;
+static volatile uint8_t s_rx_tail;
+
 void UART_Init(void) {
     /* ── 步骤1：打开时钟 ──────────────────────────────────────────
      * F407与F103区别：GPIO时钟在AHB1总线（不是APB2）
@@ -87,7 +94,11 @@ void UART_Init(void) {
      *   bit2  = RE  → 接收使能（Receiver Enable）
      *   bit13 = UE  → USART使能（USART Enable，必须最后打开）
      */
-    USART2->CR1 = (1 << 3) | (1 << 2) | (1 << 13);
+    s_rx_head = 0U;
+    s_rx_tail = 0U;
+    USART2->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE | USART_CR1_UE;
+    NVIC_SetPriority(USART2_IRQn, 1U);
+    NVIC_EnableIRQ(USART2_IRQn);
 }
 
 void UART_SendChar(char c) {
@@ -107,15 +118,30 @@ void UART_SendString(const char *str) {
 }
 
 uint8_t UART_RecvChar(char *c) {
+    uint8_t tail = s_rx_tail;
+    if (tail == s_rx_head) {
+        return 0U;
+    }
+
+    *c = (char)s_rx_buffer[tail];
+    s_rx_tail = (uint8_t)((tail + 1U) & UART_RX_BUFFER_MASK);
+    return 1U;
+}
+
+void USART2_IRQHandler(void) {
     uint32_t sr = USART2->SR;
-    if (sr & (1 << 3)) {           /* ORE: 溢出错误，读SR再读DR清除 */
-        (void)USART2->DR;
-        return 0;
+
+    if ((sr & (USART_SR_RXNE | USART_SR_ORE | USART_SR_NE |
+               USART_SR_FE | USART_SR_PE)) != 0U) {
+        uint8_t data = (uint8_t)USART2->DR;
+
+        if ((sr & USART_SR_RXNE) != 0U) {
+            uint8_t next = (uint8_t)((s_rx_head + 1U) & UART_RX_BUFFER_MASK);
+            if (next != s_rx_tail) {
+                s_rx_buffer[s_rx_head] = data;
+                s_rx_head = next;
+            }
+        }
     }
-    if (sr & (1 << 5)) {           /* RXNE: 接收数据寄存器非空 */
-        *c = (char)(USART2->DR & 0xFF);
-        return 1;
-    }
-    return 0;
 }
 
