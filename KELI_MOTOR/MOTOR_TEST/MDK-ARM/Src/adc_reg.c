@@ -22,6 +22,9 @@
 
 /* ---- 全局变量定义 ---- */
 volatile float g_motor_current_mA = 0.0f;
+volatile uint16_t g_motor_current_raw = 0U;
+static float s_current_zero_raw =
+    ADC_CURR_VREF_MV * (4095.0f / ADC_VCC_MV);
 
 /* ---- 电位器滤波器内部使用 ---- */
 #define ADC_POT_FILTER_SIZE  16U
@@ -80,6 +83,22 @@ void ADC1_Init(void)
     ADC1->SMPR2 &= ~((7U << (0U * 3U)) | (7U << (1U * 3U)));
     ADC1->SMPR2 |=  (6U << (0U * 3U))   /* CH0: 110 = 84 cycles */
                  |  (2U << (1U * 3U));  /* CH1: 010 = 28 cycles */
+
+}
+
+void ADC1_CalibrateCurrentZero(void)
+{
+    uint32_t zero_sum = 0U;
+    uint32_t i;
+
+    (void)ADC1_ReadChannel(1U);
+    for (i = 0U; i < ADC_CURR_ZERO_SAMPLES; i++) {
+        zero_sum += ADC1_ReadChannel(1U);
+    }
+
+    s_current_zero_raw = (float)zero_sum / (float)ADC_CURR_ZERO_SAMPLES;
+    g_motor_current_raw = (uint16_t)(s_current_zero_raw + 0.5f);
+    g_motor_current_mA = 0.0f;
 }
 
 /* =============================================================================
@@ -89,12 +108,27 @@ void ADC1_Init(void)
  * ============================================================================= */
 uint16_t ADC1_ReadChannel(uint8_t ch)
 {
+    static uint8_t last_ch = 0xFFU;
+
     /* 动态设置本次转换的通道 */
     ADC1->SQR3 = (uint32_t)(ch & 0x1FU);
 
-    /* 软件触发 → 等待 EOC → 读取结果 */
+    /*
+     * 通道切换后先做一次丢弃转换，让内部采样电容稳定。
+     * 可避免 PA0 电位器电压串入紧随其后的 PA1 电流采样。
+     */
+    if (ch != last_ch) {
+        ADC1->CR2 |= ADC_CR2_SWSTART;
+        while ((ADC1->SR & ADC_SR_EOC) == 0U) {
+        }
+        (void)ADC1->DR;
+        last_ch = ch;
+    }
+
+    /* 软件触发 → 等待 EOC → 读取有效结果 */
     ADC1->CR2 |= ADC_CR2_SWSTART;
-    while (!(ADC1->SR & ADC_SR_EOC)) {}
+    while ((ADC1->SR & ADC_SR_EOC) == 0U) {
+    }
     return (uint16_t)(ADC1->DR & 0x0FFFU);
 }
 
@@ -129,10 +163,29 @@ uint16_t ADC1_Read_Filtered(void)
  * ============================================================================= */
 float ADC1_ReadCurrent_mA(void)
 {
-    uint16_t raw     = ADC1_ReadChannel(1U);
-    float    vout_mv = (float)raw * (ADC_VCC_MV / 4095.0f);
-    float    i_ma    = (vout_mv - ADC_CURR_VREF_MV) * 1000.0f
-                       / (ADC_CURR_INA240_GAIN * ADC_CURR_SHUNT_MOHM);
+    uint32_t raw_sum = 0U;
+    uint32_t i;
+
+    /*
+     * SPI/FPGA 产生约 12.2kHz PWM，一个周期约 82us。
+     * 单点 ADC 会随机采到导通、续流或关断阶段，造成严重混叠。
+     * 连续采 192 点约 370us，覆盖约 4.5 个 PWM 周期，降低异步采样混叠。
+     */
+    for (i = 0U; i < ADC_CURR_BURST_SAMPLES; i++) {
+        raw_sum += ADC1_ReadChannel(1U);
+    }
+
+    float raw_avg = (float)raw_sum / (float)ADC_CURR_BURST_SAMPLES;
+    float raw_delta = raw_avg - s_current_zero_raw;
+    float i_ma = raw_delta * (ADC_VCC_MV / 4095.0f) * 1000.0f
+                 / (ADC_CURR_INA240_GAIN * ADC_CURR_SHUNT_MOHM);
+
+    /* 当前控制只允许正向驱动，负值来自零点误差或 PWM 续流采样。 */
+    if (i_ma < 0.0f) {
+        i_ma = 0.0f;
+    }
+
+    g_motor_current_raw = (uint16_t)(raw_avg + 0.5f);
     return i_ma;
 }
 

@@ -28,7 +28,7 @@
  *   单向电流（REF 接 GND）        → 0.0f
  *   双向电流（REF 接 VCC/2=1.65V）→ 1650.0f
  */
-#define ADC_CURR_VREF_MV         1773.0f  /* 实测零电流时 raw≈2200，校准值=2200/4095*3300 */
+#define ADC_CURR_VREF_MV         1650.0f  /* 自动校准失败时使用的后备零点 */
 
 /** ADC 参考电压（mV），等于 MCU VDD = 3300mV */
 #define ADC_VCC_MV               3300.0f
@@ -37,12 +37,15 @@
 /*  电流滤波器窗口（8 点移动平均）                                     */
 /* ------------------------------------------------------------------ */
 #define ADC_CURR_FILTER_SIZE     8U
+#define ADC_CURR_ZERO_SAMPLES    64U
+#define ADC_CURR_BURST_SAMPLES   192U
 
 /* ------------------------------------------------------------------ */
 /*  对外暴露的全局变量                                                  */
 /* ------------------------------------------------------------------ */
 /** 最新滤波后的电流值（mA），供 main.c 显示和外部读取 */
 extern volatile float g_motor_current_mA;
+extern volatile uint16_t g_motor_current_raw;
 
 /* ------------------------------------------------------------------ */
 /*  API                                                                 */
@@ -50,6 +53,9 @@ extern volatile float g_motor_current_mA;
 
 /** 初始化 ADC1（PA0 电位器通道 + PA1 电流通道，公共寄存器配置） */
 void     ADC1_Init(void);
+
+/** 电机确认停机后重新采集 INA240 零电流偏置 */
+void     ADC1_CalibrateCurrentZero(void);
 
 /** 读取指定通道的原始 12 位值（0~4095），ch 传 0 或 1 */
 uint16_t ADC1_ReadChannel(uint8_t ch);
