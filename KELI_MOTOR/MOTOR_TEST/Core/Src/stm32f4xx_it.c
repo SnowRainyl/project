@@ -41,6 +41,11 @@
  * 电机铭牌额定 280 RPM，此处限速 100 RPM（约 36% 额定转速）。 */
 #define MOTOR_MAX_RPM           100.0f
 #define MOTOR_MIN_RUN_RPM       15.0f
+/* START→RUN 转移阈值，低于 MIN_RUN_RPM 以提早交接、减少过冲。
+ * 下限约束：交接后 kp*(MIN_RUN_RPM - START_COMPLETE_RPM) 须足以维持电机转动。
+ * 当前电机 ~20RPM 需约 30mA，kp=0.8 → P项须≥30mA → 误差≥37RPM → 低速目标不能设太低。
+ * 建议：低速目标(<25RPM)留 12RPM，高速目标(>35RPM)可再降；此处取保守值 12RPM。 */
+#define MOTOR_START_COMPLETE_RPM 12.0f
 #define MOTOR_STOP_ADC_MAX      250U
 #define MOTOR_START_ADC_MIN     350U
 #define SPEED_LOOP_DIVIDER      10U
@@ -363,11 +368,11 @@ void SysTick_Handler(void)
 /* USER CODE BEGIN 1 */
 
 /* =============================================================================
- * TIM6 更新中断 —— 1kHz PID 控制环
+ * TIM6 更新中断 —— 1kHz PI 控制环
  *
  * 执行时间估算（5.25MHz SPI，21MHz ADC）：
- *   ADC 转换 ≈ 4.6μs，SPI 2字节 ≈ 3μs，其余开销 < 1μs → 共约 9μs
- *   占 1ms 周期的 0.9%，完全可接受。
+ *   两路 ADC 转换约 9.33μs，SPI 2字节理论传输时间约 3.05μs。
+ *   实际中断时间还包括编码器读取、PI 运算和寄存器操作，需实测确认。
  * ============================================================================= */
 void TIM6_DAC_IRQHandler(void)
 {
@@ -423,7 +428,7 @@ void TIM6_DAC_IRQHandler(void)
         case MOTOR_STARTING:
             if (adc_val <= MOTOR_STOP_ADC_MAX) {
                 g_motor_state = MOTOR_STOPPING;
-            } else if (g_encoder_rpm >= MOTOR_MIN_RUN_RPM) {
+            } else if (g_encoder_rpm >= MOTOR_START_COMPLETE_RPM) {
                 /* 启动防超调③：交接到 RUN 前泄掉 START 阶段速度环积累的多余积分，
                  * 避免击穿静摩擦瞬间的蓄能整体带入 RUN 造成冲过头。 */
                 speed_pid.integral *= SPEED_HANDOFF_KEEP;
