@@ -86,6 +86,14 @@ void ADC1_Init(void)
 
 }
 
+/*
+ * 标定值与理论零点（REF 对应 raw）的最大允许偏差。
+ * 超出即视为标定环境不干净（典型：复位时电机仍在惯性续流发电，把发电电流
+ * 当成零点存入），拒绝该值、回退到理论零点，避免幽灵电流锁死电流内环。
+ * 150 raw ≈ 24mA，足以容忍板间真实零偏，又能拦截 >100mA 级别的脏标定。
+ */
+#define ADC_CURR_ZERO_MAX_DEV    150.0f
+
 void ADC1_CalibrateCurrentZero(void)
 {
     uint32_t zero_sum = 0U;
@@ -96,7 +104,18 @@ void ADC1_CalibrateCurrentZero(void)
         zero_sum += ADC1_ReadChannel(1U);
     }
 
-    s_current_zero_raw = (float)zero_sum / (float)ADC_CURR_ZERO_SAMPLES;
+    float measured_zero   = (float)zero_sum / (float)ADC_CURR_ZERO_SAMPLES;
+    float expected_zero   = ADC_CURR_VREF_MV * (4095.0f / ADC_VCC_MV);
+    float dev             = measured_zero - expected_zero;
+    if (dev < 0.0f) {
+        dev = -dev;
+    }
+
+    /* 偏差过大 → 标定环境不可信（电机未停稳），回退理论零点。 */
+    s_current_zero_raw = (dev <= ADC_CURR_ZERO_MAX_DEV)
+                       ? measured_zero
+                       : expected_zero;
+
     g_motor_current_raw = (uint16_t)(s_current_zero_raw + 0.5f);
     g_motor_current_mA = 0.0f;
 }
