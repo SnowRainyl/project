@@ -1,202 +1,300 @@
-/* USER CODE BEGIN Header */
-/**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
-/* USER CODE END Header */
-/* Includes ------------------------------------------------------------------*/
-#include "main.h"
+/* Main program — KELI_MOTOR_REBUILD */
 
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
+#include "main.h"
+#include <stdio.h>
+#include <string.h>
 #include "uart.h"
+#include "pid.h"
+#include "stm32f4xx_it.h"
+#include "custom_i2c.h"
+#include "OLED_SSD1306.h"
 #include "spi_Reg.h"
 #include "w25q64.h"
+#include "adc_reg.h"
+#include "motor_fsm.h"
 
-/* USER CODE END Includes */
+extern void     Motor_Control_Init(void);
+extern PID_TypeDef speed_pid;
+extern PID_TypeDef current_pid;
 
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
+/* Flash storage: sector 0, magic sentinel to detect valid data */
+#define PID_FLASH_ADDR   0x000000UL
+#define PID_FLASH_MAGIC  12345.678f
 
-/* USER CODE END PTD */
+static char    uart_buf[128];
+static float   pid_flash_buf[8];   /* [magic, sp_kp, sp_ki, sp_kd, cp_kp, cp_ki, cp_kd, 0] */
 
-/* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
+static uint16_t flash_id    = 0U;
+static uint8_t  flash_id_ok = 0U;
 
-/* USER CODE END PD */
+/* ---- Command parser ---- */
+static char    cmd_buf[64];
+static uint8_t cmd_len = 0U;
 
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
-
-/* Private variables ---------------------------------------------------------*/
-
-/* USER CODE BEGIN PV */
-
-/* USER CODE END PV */
-
-/* Private function prototypes -----------------------------------------------*/
-void SystemClock_Config(void);
-/* USER CODE BEGIN PFP */
-
-/* USER CODE END PFP */
-
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
-static void PrintHex16(uint16_t value)
+/* Parse "set XX <float>" from cmd string. name is a 2-char key like "sp". */
+static uint8_t parse_float_arg(const char *cmd, const char *name, float *value)
 {
-  static const char hex[] = "0123456789ABCDEF";
+    const char *p = cmd;
+    float result = 0.0f, scale = 0.1f;
+    uint8_t neg = 0U, has_digit = 0U;
 
-  UART_SendString("0x");
-  UART_SendChar(hex[(value >> 12) & 0x0FU]);
-  UART_SendChar(hex[(value >> 8) & 0x0FU]);
-  UART_SendChar(hex[(value >> 4) & 0x0FU]);
-  UART_SendChar(hex[value & 0x0FU]);
+    while (*p == ' ' || *p == '\t') { p++; }
+    if (strncmp(p, "set", 3U) != 0) { return 0U; }
+    p += 3;
+    while (*p == ' ' || *p == '\t') { p++; }
+    if (p[0] != name[0] || p[1] != name[1]) { return 0U; }
+    p += 2;
+    if (*p != ' ' && *p != '\t') { return 0U; }
+    while (*p == ' ' || *p == '\t') { p++; }
+
+    if (*p == '-' || *p == '+') { neg = (*p == '-') ? 1U : 0U; p++; }
+    while (*p >= '0' && *p <= '9') { result = result * 10.0f + (float)(*p - '0'); has_digit = 1U; p++; }
+    if (*p == '.') {
+        p++;
+        while (*p >= '0' && *p <= '9') { result += (float)(*p - '0') * scale; scale *= 0.1f; has_digit = 1U; p++; }
+    }
+    while (*p != '\0' && ((uint8_t)*p <= 0x20U || (uint8_t)*p == 0x7FU)) { p++; }
+    if (!has_digit || *p != '\0') { return 0U; }
+
+    *value = neg ? -result : result;
+    return 1U;
 }
 
-/* USER CODE END 0 */
+static void PID_SaveToFlash(void)
+{
+    if (!flash_id_ok) { UART_SendString("[PID] Flash not connected, save skipped\r\n"); return; }
 
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
+    pid_flash_buf[0] = PID_FLASH_MAGIC;
+    pid_flash_buf[1] = speed_pid.kp;
+    pid_flash_buf[2] = speed_pid.ki;
+    pid_flash_buf[3] = speed_pid.kd;
+    pid_flash_buf[4] = current_pid.kp;
+    pid_flash_buf[5] = current_pid.ki;
+    pid_flash_buf[6] = current_pid.kd;
+    pid_flash_buf[7] = 0.0f;
+
+    uint8_t sr1 = W25Q64_ReadSR1(), sr2 = W25Q64_ReadSR2();
+    snprintf(uart_buf, sizeof(uart_buf),
+             "[PID] SR1=0x%02X SR2=0x%02X (WEL=%d BP=%d CMP=%d)\r\n",
+             sr1, sr2, (sr1 >> 1) & 1, (sr1 >> 2) & 7, (sr2 >> 6) & 1);
+    UART_SendString(uart_buf);
+
+    W25Q64_Erase_Sector(PID_FLASH_ADDR);
+    W25Q64_Write_4Floats(PID_FLASH_ADDR,       &pid_flash_buf[0]);
+    W25Q64_Write_4Floats(PID_FLASH_ADDR + 16U, &pid_flash_buf[4]);
+
+    float verify[4] = {0.0f};
+    W25Q64_Read_4Floats(PID_FLASH_ADDR, verify);
+    if (verify[0] == PID_FLASH_MAGIC) {
+        snprintf(uart_buf, sizeof(uart_buf), "[PID] Saved OK (sp_kp=%.4f)\r\n", (double)verify[1]);
+    } else {
+        uint8_t *raw = (uint8_t *)verify;
+        snprintf(uart_buf, sizeof(uart_buf),
+                 "[PID] Save FAILED readback=%.4f raw=%02X%02X%02X%02X\r\n",
+                 (double)verify[0], raw[0], raw[1], raw[2], raw[3]);
+    }
+    UART_SendString(uart_buf);
+}
+
+static void PID_LoadFromFlash(void)
+{
+    if (!flash_id_ok) { UART_SendString("[PID] Flash not connected, using defaults\r\n"); return; }
+
+    W25Q64_Read_4Floats(PID_FLASH_ADDR,       &pid_flash_buf[0]);
+    W25Q64_Read_4Floats(PID_FLASH_ADDR + 16U, &pid_flash_buf[4]);
+
+    uint8_t *raw = (uint8_t *)&pid_flash_buf[0];
+    snprintf(uart_buf, sizeof(uart_buf),
+             "[PID] Flash magic=%.4f raw=%02X%02X%02X%02X\r\n",
+             (double)pid_flash_buf[0], raw[0], raw[1], raw[2], raw[3]);
+    UART_SendString(uart_buf);
+
+    if (pid_flash_buf[0] != PID_FLASH_MAGIC) {
+        UART_SendString("[PID] No valid params in Flash, using defaults\r\n");
+        return;
+    }
+    speed_pid.kp   = pid_flash_buf[1];
+    speed_pid.ki   = pid_flash_buf[2];
+    speed_pid.kd   = pid_flash_buf[3];
+    current_pid.kp = pid_flash_buf[4];
+    current_pid.ki = pid_flash_buf[5];
+    current_pid.kd = pid_flash_buf[6];
+    UART_SendString("[PID] Loaded from Flash\r\n");
+}
+
+static void handle_pid_cmd(const char *cmd)
+{
+    float val;
+    if      (parse_float_arg(cmd, "sp", &val)) { speed_pid.kp   = val; PID_Reset(&speed_pid);   snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_kp=%.4f\r\n",  (double)val); UART_SendString(uart_buf); }
+    else if (parse_float_arg(cmd, "si", &val)) { speed_pid.ki   = val; PID_Reset(&speed_pid);   snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_ki=%.4f\r\n",  (double)val); UART_SendString(uart_buf); }
+    else if (parse_float_arg(cmd, "sd", &val)) { speed_pid.kd   = val; PID_Reset(&speed_pid);   snprintf(uart_buf, sizeof(uart_buf), "[PID] speed_kd=%.4f\r\n",  (double)val); UART_SendString(uart_buf); }
+    else if (parse_float_arg(cmd, "cp", &val)) { current_pid.kp = val; PID_Reset(&current_pid); snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_kp=%.4f\r\n",   (double)val); UART_SendString(uart_buf); }
+    else if (parse_float_arg(cmd, "ci", &val)) { current_pid.ki = val; PID_Reset(&current_pid); snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_ki=%.4f\r\n",   (double)val); UART_SendString(uart_buf); }
+    else if (parse_float_arg(cmd, "cd", &val)) { current_pid.kd = val; PID_Reset(&current_pid); snprintf(uart_buf, sizeof(uart_buf), "[PID] curr_kd=%.4f\r\n",   (double)val); UART_SendString(uart_buf); }
+    else if (strcmp(cmd, "save") == 0)  { PID_SaveToFlash(); }
+    else if (strcmp(cmd, "load") == 0)  { PID_LoadFromFlash(); }
+    else if (strcmp(cmd, "show") == 0)  {
+        snprintf(uart_buf, sizeof(uart_buf),
+                 "speed:   kp=%.4f ki=%.4f kd=%.4f\r\ncurrent: kp=%.4f ki=%.4f kd=%.4f\r\n",
+                 (double)speed_pid.kp,   (double)speed_pid.ki,   (double)speed_pid.kd,
+                 (double)current_pid.kp, (double)current_pid.ki, (double)current_pid.kd);
+        UART_SendString(uart_buf);
+    }
+    else if (strcmp(cmd, "help") == 0) {
+        UART_SendString("Commands:\r\n"
+                        "  set sp/si/sd <val>  speed kp/ki/kd\r\n"
+                        "  set cp/ci/cd <val>  current kp/ki/kd\r\n"
+                        "  show   print params\r\n"
+                        "  save   write to Flash\r\n"
+                        "  load   read from Flash\r\n");
+    }
+    else if (cmd[0] != '\0') {
+        snprintf(uart_buf, sizeof(uart_buf), "[PID] unknown: <%s>\r\n", cmd);
+        UART_SendString(uart_buf);
+    }
+}
+
 int main(void)
 {
+    HAL_Init();
 
-  /* USER CODE BEGIN 1 */
+    /* SystemClock_Config must be called before Motor_Control_Init.
+     * Motor_Control_Init sets TIM6 PSC/ARR assuming APB1_TIM_CLK=84MHz.
+     * If called before clock config, APB1 is still 16MHz -> TIM6 runs at ~190Hz
+     * instead of 1kHz, causing 5x RPM read error and broken PID. */
+    SystemClock_Config();
 
-  /* USER CODE END 1 */
+    UART_Init();
+    UART_SendString("[REBUILD] boot\r\n");
 
-  /* MCU Configuration--------------------------------------------------------*/
+    SPI1_Flash_Init();
+    SPI2_FPGA_Init();
+    ADC1_Init();
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+    /* Force FPGA duty=0 before calibrating current zero.
+     * FPGA may hold a non-zero duty from before MCU reset. */
+    FPGA_CS_LOW();
+    SPI2_ReadWriteByte(0U);
+    SPI2_ReadWriteByte(0U);
+    FPGA_CS_HIGH();
+    HAL_Delay(100U);
+    ADC1_CalibrateCurrentZero();
 
-  /* USER CODE BEGIN Init */
+    Motor_Control_Init();
 
-  /* USER CODE END Init */
+    I2C_Init();
+    OLED_Init();
+    OLED_ShowStr(0U, 0U, (uint8_t *)"KELI_MOTOR", FontSize6x8, 0U);
 
-  /* Configure the system clock */
-  SystemClock_Config();
+    flash_id = W25Q64_ReadID();
+    if (flash_id == 0xEF16U) {
+        flash_id_ok = 1U;
+        UART_SendString("[Flash] ID OK: 0xEF16\r\n");
+    } else {
+        flash_id_ok = 0U;
+        snprintf(uart_buf, sizeof(uart_buf), "[Flash] ID FAIL: 0x%04X\r\n", flash_id);
+        UART_SendString(uart_buf);
+    }
+    W25Q64_Unprotect();
+    PID_LoadFromFlash();
+    UART_SendString("type 'help' for commands\r\n");
 
-  /* USER CODE BEGIN SysInit */
+    while (1) {
+        /* Poll UART for 200ms; print telemetry only when no input activity */
+        uint8_t  rx_active    = 0U;
+        uint32_t t0           = HAL_GetTick();
+        uint32_t last_rx_tick = 0U;
 
-  /* USER CODE END SysInit */
+        while (HAL_GetTick() - t0 < 200U) {
+            char ch;
+            if (UART_RecvChar(&ch)) {
+                rx_active    = 1U;
+                last_rx_tick = HAL_GetTick();
+                if (ch == '\r' || ch == '\n') {
+                    if (cmd_len > 0U) {
+                        cmd_buf[cmd_len] = '\0';
+                        handle_pid_cmd(cmd_buf);
+                        cmd_len      = 0U;
+                        last_rx_tick = 0U;
+                    }
+                } else if (cmd_len < 63U) {
+                    cmd_buf[cmd_len++] = ch;
+                }
+            }
+            /* 50ms silence timeout: execute even if terminal omits newline */
+            if (cmd_len > 0U && last_rx_tick > 0U &&
+                HAL_GetTick() - last_rx_tick >= 50U) {
+                cmd_buf[cmd_len] = '\0';
+                handle_pid_cmd(cmd_buf);
+                cmd_len      = 0U;
+                last_rx_tick = 0U;
+            }
+        }
 
-  /* Initialize all configured peripherals */
-  /* USER CODE BEGIN 2 */
-  UART_Init();
-  UART_SendString("\r\n[KELI_MOTOR_REBUILD] UART ready\r\n");
-  SPI1_Flash_Init();
-  UART_SendString("[KELI_MOTOR_REBUILD] W25Q64 ID = ");
-  PrintHex16(W25Q64_ReadID());
-  UART_SendString("\r\n");
+        if (!rx_active) {
+            MotorTelemetry t;
+            Motor_GetTelemetry(&t);
 
-  /* USER CODE END 2 */
+            float display_rpm     = (t.duty == 0U || (t.rpm > -0.05f && t.rpm < 0.05f)) ? 0.0f : t.rpm;
+            float display_current = (t.current_mA < 0.05f) ? 0.0f : t.current_mA;
 
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    /* USER CODE END WHILE */
+            snprintf(uart_buf, sizeof(uart_buf),
+                     "[%-5s] set=%.1f setR=%.1f RPM=%.1f duty=%4u (%.1f%%) adc=%4u raw=%4u iset=%.1fmA curr=%.1fmA\r\n",
+                     Motor_State_Name(t.state),
+                     (double)t.rpm_set, (double)t.rpm_set_ramped, (double)display_rpm,
+                     t.duty, (double)t.duty / 40.95,
+                     t.pot_adc, t.current_raw,
+                     (double)t.current_set_mA, (double)display_current);
+            UART_SendString(uart_buf);
 
-    /* USER CODE BEGIN 3 */
-    UART_SendString("[KELI_MOTOR_REBUILD] alive\r\n");
-    HAL_Delay(1000);
-  }
-  /* USER CODE END 3 */
+            char oled_buf[22];
+            snprintf(oled_buf, sizeof(oled_buf), "%-5s RPM:%-5.1f", Motor_State_Name(t.state), (double)display_rpm);
+            OLED_ShowStr(0U, 2U, (uint8_t *)oled_buf, FontSize6x8, 0U);
+            snprintf(oled_buf, sizeof(oled_buf), "Duty:%-6.1f%%", (double)t.duty / 40.95);
+            OLED_ShowStr(0U, 4U, (uint8_t *)oled_buf, FontSize6x8, 0U);
+            snprintf(oled_buf, sizeof(oled_buf), "Curr:%-6.1fmA", (double)display_current);
+            OLED_ShowStr(0U, 6U, (uint8_t *)oled_buf, FontSize6x8, 0U);
+        }
+    }
 }
 
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
 void SystemClock_Config(void)
 {
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-  /** Configure the main internal regulator output voltage
-  */
-  __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+    __HAL_RCC_PWR_CLK_ENABLE();
+    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 8;
-  RCC_OscInitStruct.PLL.PLLN = 168;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 4;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
+    RCC_OscInitStruct.OscillatorType      = RCC_OSCILLATORTYPE_HSI;
+    RCC_OscInitStruct.HSIState            = RCC_HSI_ON;
+    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+    RCC_OscInitStruct.PLL.PLLState        = RCC_PLL_ON;
+    RCC_OscInitStruct.PLL.PLLSource       = RCC_PLLSOURCE_HSI;
+    RCC_OscInitStruct.PLL.PLLM            = 8;
+    RCC_OscInitStruct.PLL.PLLN            = 168;
+    RCC_OscInitStruct.PLL.PLLP            = RCC_PLLP_DIV2;
+    RCC_OscInitStruct.PLL.PLLQ            = 4;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) { Error_Handler(); }
 
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
-
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
-  {
-    Error_Handler();
-  }
+    RCC_ClkInitStruct.ClockType      = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
+                                     | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+    RCC_ClkInitStruct.SYSCLKSource   = RCC_SYSCLKSOURCE_PLLCLK;
+    RCC_ClkInitStruct.AHBCLKDivider  = RCC_SYSCLK_DIV1;
+    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK) { Error_Handler(); }
 }
 
-/* USER CODE BEGIN 4 */
-
-/* USER CODE END 4 */
-
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
 void Error_Handler(void)
 {
-  /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
-  /* USER CODE END Error_Handler_Debug */
+    __disable_irq();
+    while (1) {}
 }
+
 #ifdef USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
+    (void)file; (void)line;
 }
-#endif /* USE_FULL_ASSERT */
+#endif
