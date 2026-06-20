@@ -9,7 +9,6 @@ extern "C" {
 
 extern const unsigned char F6X8[];           /* ASCII 6x8 font, offset 32 */
 extern const unsigned char F8X16[];          /* ASCII 8x16 font, offset 32 */
-extern const unsigned char FontCN[][32];     /* Chinese 16x16 characters */
 extern const unsigned char Num20X40[][100];  /* Large digit 20x40 */
 extern const unsigned char TestBMP[];        /* 128x64 test bitmap */
 
