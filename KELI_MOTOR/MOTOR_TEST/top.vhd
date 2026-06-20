@@ -1,14 +1,5 @@
--- =============================================================================
--- top.vhd  （无复位版，上电直接运行）
---
--- 引脚：
---   clk     : FPGA 系统时钟（50MHz）
---   sck     : STM32 PB13（SPI2_SCK）
---   cs_n    : STM32 PB12（SPI2_CS）
---   mosi    : STM32 PB15（SPI2_MOSI）
---   miso    : STM32 PB14（SPI2_MISO，未使用）
---   pwm_out : 电机驱动器 PWM 输入
--- =============================================================================
+-- top.vhd
+-- Pins: clk=50MHz, sck=PB13, cs_n=PB12, mosi=PB15, miso=PB14(unused), pwm_out->motor driver
 
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;

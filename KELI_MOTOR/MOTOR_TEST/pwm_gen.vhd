@@ -1,10 +1,5 @@
--- =============================================================================
--- pwm_gen.vhd  （无复位版，上电直接运行）
--- 12 位动态占空比 PWM 生成器
---
--- PWM 频率：50MHz / 4096 ≈ 12.2 kHz
--- 占空比  ：duty=0 → 0%，duty=4095 → 99.98%
--- =============================================================================
+-- pwm_gen.vhd
+-- 12-bit PWM generator. Frequency: 50MHz / 4096 = 12.2kHz. duty=0->0%, duty=4095->99.98%
 
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
@@ -26,7 +21,6 @@ architecture Behavioral of pwm_gen is
 
 begin
 
-    -- 锁存新占空比
     p_latch : process(clk)
     begin
         if rising_edge(clk) then
@@ -36,7 +30,6 @@ begin
         end if;
     end process;
 
-    -- 自由计数器，12bit 自动溢出
     p_counter : process(clk)
     begin
         if rising_edge(clk) then
@@ -44,7 +37,6 @@ begin
         end if;
     end process;
 
-    -- PWM 比较输出
     pwm_out <= '1' when counter < duty_latched else '0';
 
 end Behavioral;
