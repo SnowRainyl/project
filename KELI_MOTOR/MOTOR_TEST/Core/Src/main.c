@@ -34,11 +34,7 @@
 #include "adc_reg.h"
 #include "motor_fsm.h"
 
-/* 来自 stm32f4xx_it.c 的外部符号 */
 extern void              Motor_Control_Init(void);
-extern volatile uint16_t g_pid_duty;
-extern volatile uint16_t g_adc_val;
-extern volatile float    g_encoder_rpm;
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -70,7 +66,7 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static char uart_buf[128];
+static char uart_buf[160];
 
 /* Flash 连接状态（1 = ID 正确 0xEF16） */
 uint16_t flash_id    = 0;
@@ -84,6 +80,10 @@ static float pid_flash_buf[8];         /* [magic, sp_kp, sp_ki, sp_kd, cp_kp, cp
 /* ===== 串口命令行缓冲 ===== */
 static char    cmd_buf[64];
 static uint8_t cmd_len = 0;
+
+static uint8_t PollPidCommand(void);
+static void PrintMotorStatus(const MotorTelemetry *t);
+static void UpdateOled(const MotorTelemetry *t);
 
 static uint8_t parse_float_arg(const char *cmd, const char *name, float *value) {
     const char *p = cmd;
@@ -252,6 +252,72 @@ static void handle_pid_cmd(const char *cmd) {
         UART_SendString(uart_buf);
     }
 }
+
+static uint8_t PollPidCommand(void) {
+    uint8_t  rx_active    = 0;
+    uint32_t t0           = HAL_GetTick();
+    uint32_t last_rx_tick = 0;
+
+    while (HAL_GetTick() - t0 < 200) {
+        char ch;
+        if (UART_RecvChar(&ch)) {
+            rx_active    = 1;
+            last_rx_tick = HAL_GetTick();
+            if (ch == '\r' || ch == '\n') {
+                if (cmd_len > 0) {
+                    cmd_buf[cmd_len] = '\0';
+                    handle_pid_cmd(cmd_buf);
+                    cmd_len      = 0;
+                    last_rx_tick = 0;
+                }
+            } else if (cmd_len < 63) {
+                cmd_buf[cmd_len++] = ch;
+            }
+        }
+
+        if (cmd_len > 0 && last_rx_tick > 0 &&
+            HAL_GetTick() - last_rx_tick >= 50) {
+            cmd_buf[cmd_len] = '\0';
+            handle_pid_cmd(cmd_buf);
+            cmd_len      = 0;
+            last_rx_tick = 0;
+        }
+    }
+
+    return rx_active;
+}
+
+static void PrintMotorStatus(const MotorTelemetry *t) {
+    float display_rpm = (t->duty == 0U || (t->rpm > -0.05f && t->rpm < 0.05f))
+                      ? 0.0f : t->rpm;
+    float display_current = (t->current_mA < 0.05f) ? 0.0f : t->current_mA;
+
+    snprintf(uart_buf, sizeof(uart_buf),
+             "[%-5s] set=%.1f setR=%.1f RPM=%.1f duty=%4u (%.1f%%) adc=%4u curr_raw=%4u iset=%.1fmA curr=%.1fmA\r\n",
+             Motor_State_Name(t->state),
+             (double)t->rpm_set,
+             (double)t->rpm_set_ramped,
+             (double)display_rpm,
+             t->duty, (double)t->duty / 40.95,
+             t->pot_adc, t->current_raw,
+             (double)t->current_set_mA,
+             (double)display_current);
+    UART_SendString(uart_buf);
+}
+
+static void UpdateOled(const MotorTelemetry *t) {
+    char oled_buf[22];
+    float display_rpm = (t->duty == 0U || (t->rpm > -0.05f && t->rpm < 0.05f))
+                      ? 0.0f : t->rpm;
+    float display_current = (t->current_mA < 0.05f) ? 0.0f : t->current_mA;
+
+    snprintf(oled_buf, sizeof(oled_buf), "%-5s RPM:%-5.1f", Motor_State_Name(t->state), (double)display_rpm);
+    OLED_ShowStr(0, 2, (uint8_t *)oled_buf, FontSize6x8, 0);
+    snprintf(oled_buf, sizeof(oled_buf), "Duty:%-6.1f%%", (double)t->duty / 40.95);
+    OLED_ShowStr(0, 4, (uint8_t *)oled_buf, FontSize6x8, 0);
+    snprintf(oled_buf, sizeof(oled_buf), "Curr:%-6.1fmA", (double)display_current);
+    OLED_ShowStr(0, 6, (uint8_t *)oled_buf, FontSize6x8, 0);
+}
 /* USER CODE END 0 */
 
 /**
@@ -301,19 +367,12 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
-  /* 初始化串口、I2C 和 OLED */
- // UART_Init();      // 已在 1 处调用，可重复安全调用
-	/*
-		if no connected the OLED screen, but init it in code,
-		execution will be stalled here, pay attention.
-		
-	*/
+  /* 初始化 I2C 和 OLED */
   I2C_Init();
   OLED_Init();
   OLED_ShowStr(0, 0, (uint8_t *)"KELI_MOTOR", FontSize6x8, 0);
-  UART_SendString("hhhh\r\n");
   /* ============================================================
-   * W25Q64FV Flash 测试
+   * W25Q64FV Flash 初始化
    * ============================================================ */
 
   /* Step 1: 读 ID，验证 SPI 通信是否正常 */
@@ -346,35 +405,7 @@ int main(void)
     /* USER CODE BEGIN 3 */
     /* PID 控制环已在 TIM6 1kHz 中断里自动运行，主循环只负责监控打印 */
 
-    /* ---- 第一步：先轮询串口 200ms，期间不发任何数据，保证收得到命令 ---- */
-    uint8_t  rx_active    = 0;
-    uint32_t t0           = HAL_GetTick();
-    uint32_t last_rx_tick = 0;   /* 最后一次收到字符的时刻 */
-    while (HAL_GetTick() - t0 < 200) {
-        char ch;
-        if (UART_RecvChar(&ch)) {
-            rx_active    = 1;
-            last_rx_tick = HAL_GetTick();
-            if (ch == '\r' || ch == '\n') {
-                if (cmd_len > 0) {
-                    cmd_buf[cmd_len] = '\0';
-                    handle_pid_cmd(cmd_buf);  /* save会在这里阻塞~400ms */
-                    cmd_len      = 0;
-                    last_rx_tick = 0;
-                }
-            } else if (cmd_len < 63) {
-                cmd_buf[cmd_len++] = ch;
-            }
-        }
-        /* 50ms 静默超时：串口助手不发换行符时也能自动执行命令 */
-        if (cmd_len > 0 && last_rx_tick > 0 &&
-            HAL_GetTick() - last_rx_tick >= 50) {
-            cmd_buf[cmd_len] = '\0';
-            handle_pid_cmd(cmd_buf);
-            cmd_len      = 0;
-            last_rx_tick = 0;
-        }
-    }
+    uint8_t rx_active = PollPidCommand();
 
     /* ---- 第二步：没有命令活动时才打印 RPM / 刷新 OLED（5Hz） ---- */
     if (!rx_active) {
@@ -382,28 +413,8 @@ int main(void)
         MotorTelemetry t;
         Motor_GetTelemetry(&t);
 
-        float display_rpm = (t.duty == 0U || (t.rpm > -0.05f && t.rpm < 0.05f))
-                          ? 0.0f : t.rpm;
-        float display_current = (t.current_mA < 0.05f) ? 0.0f : t.current_mA;
-        snprintf(uart_buf, sizeof(uart_buf),
-                 "[%-5s] set=%.1f setR=%.1f RPM=%.1f duty=%4u (%.1f%%) adc=%4u raw=%4u iset=%.1fmA curr=%.1fmA\r\n",
-                 Motor_State_Name(t.state),
-                 (double)t.rpm_set,
-                 (double)t.rpm_set_ramped,
-                 (double)display_rpm,
-                 t.duty, (double)t.duty / 40.95,
-                 t.pot_adc, t.current_raw,
-                 (double)t.current_set_mA,
-                 (double)display_current);
-        UART_SendString(uart_buf);
-
-        char oled_buf[22];
-        snprintf(oled_buf, sizeof(oled_buf), "%-5s RPM:%-5.1f", Motor_State_Name(t.state), (double)display_rpm);
-        OLED_ShowStr(0, 2, (uint8_t *)oled_buf, FontSize6x8, 0);
-        snprintf(oled_buf, sizeof(oled_buf), "Duty:%-6.1f%%", (double)t.duty / 40.95);
-        OLED_ShowStr(0, 4, (uint8_t *)oled_buf, FontSize6x8, 0);
-        snprintf(oled_buf, sizeof(oled_buf), "Curr:%-6.1fmA", (double)display_current);
-        OLED_ShowStr(0, 6, (uint8_t *)oled_buf, FontSize6x8, 0);
+        PrintMotorStatus(&t);
+        UpdateOled(&t);
     }
 
   }
