@@ -34,7 +34,6 @@ typedef enum {
 typedef struct {
     MotorState state;
     float      rpm_set;          /* potentiometer target (RPM), after MIN clamp */
-    float      rpm_set_ramped;   /* slew-limited setpoint fed to speed PID */
     float      rpm;              /* measured speed (RPM) */
     float      current_set_mA;   /* speed loop output = current setpoint (mA) */
     float      current_mA;       /* measured current (mA) */

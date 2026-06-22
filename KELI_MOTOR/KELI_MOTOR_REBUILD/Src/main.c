@@ -239,9 +239,9 @@ int main(void)
             float display_current = (t.current_mA < 0.05f) ? 0.0f : t.current_mA;
 
             snprintf(uart_buf, sizeof(uart_buf),
-                     "[%-5s] set=%.1f setR=%.1f RPM=%.1f duty=%4u (%.1f%%) adc=%4u raw=%4u iset=%.1fmA curr=%.1fmA\r\n",
+                     "[%-5s] set=%.1f RPM=%.1f duty=%4u (%.1f%%) adc=%4u raw=%4u iset=%.1fmA curr=%.1fmA\r\n",
                      Motor_State_Name(t.state),
-                     (double)t.rpm_set, (double)t.rpm_set_ramped, (double)display_rpm,
+                     (double)t.rpm_set, (double)display_rpm,
                      t.duty, (double)t.duty / 40.95,
                      t.pot_adc, t.current_raw,
                      (double)t.current_set_mA, (double)display_current);

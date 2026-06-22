@@ -96,18 +96,6 @@
 #define CURRENT_HANDOFF_KEEP       0.4f
 #define DUTY_HANDOFF_KEEP          0.6f
 
-/* ===== 给定斜率限幅（setpoint ramp）=====
- *
- * 动机：电位器阶跃式拧到高档时，速度环看到目标突变 → 误差/积分骤增 → 暴力挣脱 + 过冲。
- * t22 实测"缓慢拧旋钮"几乎零过冲，本质是目标渐进上升。这里在软件里对 setpoint_rpm 限
- * 斜率，使任何快速旋钮动作都被整形为平缓爬坡（升、降都限），从源头减小给定突变。
- *
- * 注意：ramp 必须放在 MOTOR_MIN_RUN_RPM 钳位之后，对"钳位后的目标"做爬坡；否则 ramped
- * 值会被 MIN_RUN 钳位直接跳到 ~15 RPM，ramp 失效。
- *
- * 0.1 RPM/速度环周期，速度环 100Hz → 约 10 RPM/s。
- */
-#define SETPOINT_SLEW_RPM_PER_STEP 0.1f
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -378,7 +366,6 @@ void TIM6_DAC_IRQHandler(void)
 {
     static uint8_t  speed_loop_count = 0U;
     static uint16_t duty_applied     = 0U;
-    static float    setpoint_ramped  = 0.0f;   /* 斜率限幅后的给定，跨拍保持 */
 
     if (TIM6->SR & TIM_SR_UIF) {
         uint8_t  speed_loop_due = 0U;
@@ -471,21 +458,7 @@ void TIM6_DAC_IRQHandler(void)
              * 1ms 窗口内一个计数约等于 40RPM，过于离散；10ms 窗口可显著降低量化跳变。
              */
             if (speed_loop_due != 0U) {
-                /*
-                 * 给定斜率限幅：对"钳位后的目标 setpoint_rpm"做爬坡，升降均限速。
-                 * 必须在 MIN_RUN 钳位之后做，喂给 PID 的是 setpoint_ramped（不再重新钳位），
-                 * 否则会被 MIN_RUN 直接跳到 ~15 RPM。
-                 */
-                float ramp_diff = setpoint_rpm - setpoint_ramped;
-                if (ramp_diff > SETPOINT_SLEW_RPM_PER_STEP) {
-                    setpoint_ramped += SETPOINT_SLEW_RPM_PER_STEP;
-                } else if (ramp_diff < -SETPOINT_SLEW_RPM_PER_STEP) {
-                    setpoint_ramped -= SETPOINT_SLEW_RPM_PER_STEP;
-                } else {
-                    setpoint_ramped = setpoint_rpm;
-                }
-
-                g_current_setpoint_mA = PID_Calc(&speed_pid, setpoint_ramped, g_encoder_rpm);
+                g_current_setpoint_mA = PID_Calc(&speed_pid, setpoint_rpm, g_encoder_rpm);
 
                 /*
                  * START 阶段启动防超调：电机尚未达到运行转速，存在长时间堵转的可能。
@@ -535,9 +508,6 @@ void TIM6_DAC_IRQHandler(void)
             PID_Reset(&speed_pid);
             PID_Reset(&current_pid);
             g_current_setpoint_mA = 0.0f;
-            /* 给定爬坡跟随实测转速，使减速途中再启动时从当前转速续接，而非从 0 重爬。 */
-            setpoint_ramped = (g_encoder_rpm > 0.0f) ? g_encoder_rpm : 0.0f;
-
             /*
              * 进入死区后平滑减小占空比，避免扭矩瞬间消失造成机械卡顿。
              * duty 降到 0 后由状态机迁移到 IDLE，不在死区内持续驱动。
@@ -568,7 +538,6 @@ void TIM6_DAC_IRQHandler(void)
             g_current_setpoint_mA = 0.0f;
             duty_applied          = 0U;
             duty                  = 0U;
-            setpoint_ramped       = (g_encoder_rpm > 0.0f) ? g_encoder_rpm : 0.0f;
             if (stopped) {
                 g_motor_current_mA = 0.0f;
             }
@@ -591,7 +560,6 @@ void TIM6_DAC_IRQHandler(void)
 
         g_motor_telemetry.state          = g_motor_state;
         g_motor_telemetry.rpm_set        = setpoint_rpm;
-        g_motor_telemetry.rpm_set_ramped = setpoint_ramped;
         g_motor_telemetry.rpm            = g_encoder_rpm;
         g_motor_telemetry.current_set_mA = g_current_setpoint_mA;
         g_motor_telemetry.current_mA     = g_motor_current_mA;

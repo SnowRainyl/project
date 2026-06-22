@@ -32,12 +32,10 @@
 #define SPEED_HANDOFF_KEEP         0.4f
 
 /* At START->RUN handoff, bleed current loop integral and duty accumulator
- * to release energy trapped by the ramp limiter. */
+ * to release energy trapped by the duty slew limiter. */
 #define CURRENT_HANDOFF_KEEP       0.4f
 #define DUTY_HANDOFF_KEEP          0.6f
 
-/* Setpoint slew rate: 0.1 RPM per speed-loop step = 10 RPM/s */
-#define SETPOINT_SLEW_RPM_PER_STEP 0.1f
 
 /* ---- Module-level state ---- */
 PID_TypeDef speed_pid;
@@ -84,7 +82,6 @@ void TIM6_DAC_IRQHandler(void)
 {
     static uint8_t  speed_loop_count = 0U;
     static uint16_t duty_applied     = 0U;
-    static float    setpoint_ramped  = 0.0f;
 
     if (!(TIM6->SR & TIM_SR_UIF)) { return; }
     TIM6->SR &= ~TIM_SR_UIF;
@@ -156,13 +153,7 @@ void TIM6_DAC_IRQHandler(void)
         if (setpoint_rpm < MOTOR_MIN_RUN_RPM) { setpoint_rpm = MOTOR_MIN_RUN_RPM; }
 
         if (speed_loop_due) {
-            /* Slew-limit the setpoint to prevent abrupt speed step from winding up integral */
-            float diff = setpoint_rpm - setpoint_ramped;
-            if      (diff >  SETPOINT_SLEW_RPM_PER_STEP) { setpoint_ramped += SETPOINT_SLEW_RPM_PER_STEP; }
-            else if (diff < -SETPOINT_SLEW_RPM_PER_STEP) { setpoint_ramped -= SETPOINT_SLEW_RPM_PER_STEP; }
-            else                                          { setpoint_ramped  = setpoint_rpm; }
-
-            g_current_setpoint_mA = PID_Calc(&speed_pid, setpoint_ramped, g_encoder_rpm);
+            g_current_setpoint_mA = PID_Calc(&speed_pid, setpoint_rpm, g_encoder_rpm);
 
             if (g_motor_state == MOTOR_STARTING) {
                 if (speed_pid.integral > SPEED_START_INTEGRAL_MAX) {
@@ -193,9 +184,6 @@ void TIM6_DAC_IRQHandler(void)
         PID_Reset(&speed_pid);
         PID_Reset(&current_pid);
         g_current_setpoint_mA = 0.0f;
-        /* Keep ramped setpoint near actual speed so a restart resumes smoothly */
-        setpoint_ramped = (g_encoder_rpm > 0.0f) ? g_encoder_rpm : 0.0f;
-
         if (duty_applied > DUTY_STOP_SLEW_PER_MS) { duty_applied -= DUTY_STOP_SLEW_PER_MS; }
         else                                       { duty_applied  = 0U; }
         duty = duty_applied;
@@ -210,7 +198,6 @@ void TIM6_DAC_IRQHandler(void)
         g_current_setpoint_mA = 0.0f;
         duty_applied  = 0U;
         duty          = 0U;
-        setpoint_ramped = (g_encoder_rpm > 0.0f) ? g_encoder_rpm : 0.0f;
         if (stopped) { g_motor_current_mA = 0.0f; }
         break;
     }
@@ -227,7 +214,6 @@ void TIM6_DAC_IRQHandler(void)
     g_pid_duty = duty;
     g_motor_telemetry.state          = g_motor_state;
     g_motor_telemetry.rpm_set        = setpoint_rpm;
-    g_motor_telemetry.rpm_set_ramped = setpoint_ramped;
     g_motor_telemetry.rpm            = g_encoder_rpm;
     g_motor_telemetry.current_set_mA = g_current_setpoint_mA;
     g_motor_telemetry.current_mA     = g_motor_current_mA;

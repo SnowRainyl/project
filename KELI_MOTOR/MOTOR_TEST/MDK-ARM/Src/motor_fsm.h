@@ -49,8 +49,7 @@ typedef enum {
 /* ---- 统一遥测快照 ---- */
 typedef struct {
     MotorState state;            /* 当前状态机状态 */
-    float      rpm_set;          /* 电位器目标转速（RPM，已含启动下限钳位，ramp 终点） */
-    float      rpm_set_ramped;   /* 经斜率限幅后实际喂给速度 PID 的目标（RPM） */
+    float      rpm_set;          /* 电位器目标转速（RPM，已含启动下限钳位） */
     float      rpm;              /* 实测转速（RPM） */
     float      current_set_mA;   /* 速度外环输出的电流给定（mA） */
     float      current_mA;       /* 实测电流（mA） */
