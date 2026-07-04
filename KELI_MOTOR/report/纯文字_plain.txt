@@ -1,0 +1,491 @@
+[CHAPTER] Abstract This report introduces the design and implementation of a DC motor cascade closed-loop control system based on STM32F407 microcontroller and AX309 FPGA development board. The system adopts a cascade PI control structure composed of a speed outer loop and a current inner loop to achieve smooth speed adjustment in the range of 0 to 100 RPM. The initialization and data sending and receiving of the main peripherals of the system are implemented in register-level C language, including UART, ADC, SPI, I2C and TIM3 orthogonal encoder interfaces. FPGA uses VHDL to realize a 12-bit PWM generator with a PWM frequency of about 12.2 kHz, and receives duty cycle instructions sent by STM32 through SPI. The motor current is sampled by the INA240A2 bidirectional current shunt monitor and sent into the current inner loop, and the encoder speed feedback closes the speed outer loop. The experimental results show that the system can operate in a stable closed loop in the range of 0–100 RPM, and the actual measured PWM frequency is 12.207 kHz (completely consistent with the theoretical value of 50 MHz/4096); the output shaft is not connected to the external load, and the target speed is 100 RP. At M, the system measures that the motor current is about 30 mA.
+
+Keywords: cascade PI, STM32F407, FPGA, DC motor control, current sampling, register-level programming, VHDL
+
+[CHAPTER] Thank you [Fill in the thank you content here.] [CHAPTER] System Analysis and Design [SECTION] Functional Requirements and Feasibility Analysis This project is to realize a set of low-speed DC motor closed-loop speed control system. The user gives the speed through the rotary potentiometer, and STM32F407 reads the potentiometer voltage and converts it into the target speed of 0–100 RPM; the encoder provides actual speed feedback, and the current sampling amplifier (INA240A2) provides motor current feedback. The controller calculates the PWM duty cycle according to these feedbacks and sends it to FPGA through SPI, and the FPGA outputs the PWM signal to drive the back-end motor drive module. Around this control link, the system needs to complete the following functions: - Speed setting and closed-loop speed adjustment: support the target speed setting of 0–100 RPM, and automatically adjust the PWM duty cycle according to the encoder feedback, so that the motor speed follows the given value. - Control accuracy target: in P When the ID parameters are determined and the load conditions are stable, the goal is to reduce the steady-state error between the actual speed and the target speed, and the specific error is evaluated through subsequent experimental data. - Operating status display: OLED displays the target speed, actual speed, PWM duty cycle and motor current in real time, which is convenient for Field observation system status. - Debugging information output: connect the PC through UART to output the speed, current, duty cycle and PID intermediate quantity, which is convenient for observing the operating status and adjusting PID parameters. - Parameter non-volatile storage: use SPI Flash (W25 Q64) Save PID parameters; when the system is powered on, it will check whether there are valid parameters in Flash, and if there are, they will be automatically read and used. In terms of hardware conditions, STM32F407 has provided the main interfaces required for this project: ADC can be used for potentiometer and current signal sampling, timer can be used for encoder speed measurement and cycle control, and USART, SPI and I2C are used for serial debugging, external Flash, FPGA communication and OLED display. The specific peripheral instance and the corresponding pin will be listed in the subsequent peripheral mapping chapter. The execution part generates a 12-bit PWM signal from FPGA, and the H-bridge motor drive module (TB6612FNG) converts the PWM signal into the driving voltage and current required by the motor; the INA240A2 current sampling module is connected in series between the H-bridge output and the motor, The R100 (0.1) sampling resistance on the module generates a voltage drop, which is amplified and sent to ADC. From the perspective of software implementation, the program can be divided into modules such as sampling, filtering, control, communication, display and parameter storage. The periodic control task is responsible for reading the input and feedback signals, and outputting the PWM control amount according to the calculation results of the cascade PI; serial command processing, OLED refresh and Flash parameter saving are completed in the main loop. In this way, closed-loop control, display, storage and other tasks can be realized separately, and the program structure is also clearer. In summary, this project has the conditions for implementation in terms of hardware interface and software task division. The results of steady-state error, current measurement and parameter preservation will be further verified in the experimental chapter.
+[SECTION] System Architecture Design The system adopts a hierarchical architecture, as shown in Figure [REF]. [FIGURE CAPTION] DC motor cascade PI control system architecture diagram. The system is mainly composed of MCU control part, FPGA PWM generation module and motor execution part. The potentiometer output first passes through RC filtering, and then connects to the ADC channel 1 of the MCU as the target speed input; the INA240A2 module is connected in series between the H-bridge output and the motor, and the module output is connected to the ADC channel 2 as a current feedback; the encoder A/B The timer encoder interface connected to the MCU is used to calculate the actual speed. MCU completes the cascade PI operation according to the target speed, actual speed and current feedback, and sends the duty cycle instruction to the FPGA through SPI2. FPGA generates a PWM signal and drives the H-bridge motor drive module, and finally controls the operation of the DC motor. W25Q64 Flash, OLED and PC are connected to MCU through SPI1, I2C and UART respectively for PID parameter storage, status display and serial debugging. The main control link is as follows:
+
+[MATH]
+\text{Potentiometer} \xrightarrow{\text{RC + ADC}} \text{STM32 PID}
+\xrightarrow{\text{SPI2}} \text{FPGA} \xrightarrow{\text{PWM}}
+\text{TB6612} \rightarrow \text{Motor}
+[/MATH]
+
+The encoder speed and current sampling signals are fed back to STM32 to form a closed-loop control. [SECTION] Control strategy: If only single-loop speed PI is used, the control link can be expressed as:
+
+[MATH]
+\text{Target Speed}
+\rightarrow \text{Speed PI}
+\rightarrow \text{PWM}
+\rightarrow \text{Motor}
+[/MATH]
+
+This structure can adjust the speed, but it only corrects the PWM according to the feedback of the encoder. The encoder reflects the result of mechanical movement, which is relatively slow due to the influence of rotor inertia and load; the motor current is the electrical amount, and the PWM will rise faster when it increases. Therefore, when starting or the load suddenly changes, the speed feedback may not change significantly. The current has risen first, and it is difficult for the single-loop speed PI to constrain the current in time. For this reason, this project adds a current loop between the speed loop and PWM to form a cascade PI:
+
+[MATH]
+\text{Target Speed}
+\rightarrow \text{Speed PI}
+\rightarrow \text{Target Current}
+\rightarrow \text{Current PI}
+\rightarrow \text{PWM}
+\rightarrow \text{Motor}
+[/MATH]
+
+Among them, the encoder speed is fed back to the speed PI, and the current sampling result is fed back to the current PI. The speed outer loop gives the target current according to the speed error, indicating how much driving force is needed to approach the target speed at present; the current inner loop then calculates PWM according to the target current and actual current, and the duty cycle is no longer directly determined by the speed error. The division of labor of these two closed loops is: the speed outer loop is responsible for the speed target, and the current inner loop is responsible for the actual current. Because the current change is faster than the speed change, the current loop can perceive the current rise caused by start-up or load change earlier, and adjust the PWM according to the actual current; at the same time, the target current itself has an upper limit, so it can reduce the pressure caused by excessive current on the motor and drive circuit.
+
+[CHAPTER] Hardware architecture and module implementation This chapter further explains the specific implementation and connection relationship of each hardware module on the basis of the system architecture diagram. The content includes input and feedback links, MCU peripherals and pin distribution, FPGA PWM generator module, motor drive circuit and power supply connection method. The register-level peripheral driver will be developed in the next chapter, and the specific formula and limit processing of the control algorithm will be explained in the subsequent chapter of the control algorithm. [SECTION] Input and Feedback Sensing Link [SUBSECTION] Potentiometer and RC Low-pass Filter
+
+The rotary potentiometer is connected to PA0 (ADC1\_IN0) as the target speed given input. Because there may be contact jitter at the sliding end of the potentiometer when it rotates mechanically, the power supply of the breadboard also contains digital circuit switching noise. If it is directly connected to the ADC, it is easy to cause the sampling value to jump. Therefore, the potentiometer output first passes through the RC low-pass filter (f_c = 1/(2 RC)) to attenuate high-frequency interference before entering the ADC. [FIGURE CAPTION] Physical connection diagram of input and feedback sensing links. [FIGURE CAPTION] Potentiometer speed given input and RC low-pass filter circuit. [SUBSECTION] Current Sensing: INA240A2 current sampling module This project uses the INA240A2 current sampling module with R100 sampling resistance. The R100 in the module is connected to the motor in series, and the connection relationship is
+
+[MATH]
+\text{AO1} \rightarrow \text{R100} \rightarrow \text{Motor} \rightarrow \text{AO2}.
+[/MATH]
+
+Therefore, all the motor current will flow through R100. The IN+ and IN- of INA240A2 are connected at both ends of R100 respectively to measure the voltage difference on the resistor; its input end is only responsible for measurement, and the main current of the motor will not flow into the INA240A2 chip. This connection method directly measures the motor current in the H-bridge output loop, which is not an ordinary power supply high edge or ground low edge sampling. The resistance of R100 is 0.1, and when the current flows, it will produce a small voltage drop proportional to the current. Estimated at a working current of 30–300 mA, the voltage drop is about 3–30 mV. INA240A2 amplifies the differential voltage between IN+ and IN- by 50 times, and then sends it to PA1 (ADC1\_IN1) of STM32 through the OUT pin, so that the current change can be measured stably.
+
+[FIGURE CAPTION] INA240A2 current sampling link on the output side of the H bridge. The output voltage of INA240A2 can be expressed as:
+
+[MATH]
+V_{\text{out}} = V_{\text{ref}} + G \cdot I \cdot R_{\text{shunt}}
+\label{eq:ina240_out}
+[/MATH]
+
+REF1 has been connected to GND and REF2 to VCC inside the module, so the theoretical zero current benchmark is V_ref = V_CC/2. When there is no current in the motor, the original value read by STM32 through PA1 (ADC1\_IN1) is about 2200; according to the full range conversion of 3.3 V ADC, the zero current output of INA240A2 is about 1773 mV. The software uses this value for zero calibration, and the formula for calculating the motor current is:
+
+[MATH]
+I\,[\text{mA}] = \frac{V_{\text{out}}\,[\text{mV}] - 1773}
+{50 \times 0.1}
+= \frac{V_{\text{out}} - 1773}{5}
+\label{eq:current}
+[/MATH]
+
+When the motor output shaft is not connected to the external load and the target speed is 100 RPM, the system measures that the motor current is about 30 mA. The 12 V no-load current given by the motor manual is about 70 mA, but the data corresponds to the full-speed no-load condition of about 280 RPM. Since this project limits the speed to 100 RPM through PWM, the test conditions of the two are different, so the manual data is only for order-of-magnitude reference. [SUBSECTION] Speed sensing: encoder and TIM3 orthogonal decoding JGA25-370 motor has a built-in Hall effect orthogonal encoder, output A and B two-phase signals. The encoder is installed on the internal shaft of the motor, and the control object is the output shaft after deceleration. Therefore, the speed calculation needs to consider the number of pulses per turn of the encoder and the gear reduction ratio at the same time. The motor encoder of this project is 11 PPR, and the deceleration ratio is 34. The TIM3 encoder mode counts the four edges of the A/B phase, so the output shaft corresponds to each turn.
+
+[MATH]
+11 \times 34 \times 4 = 1496
+[/MATH]
+
+Count. If GPIO external interrupt processing is used, each edge will trigger the CPU interrupt, and when the motor speed increases, it will obviously occupy the control cycle time. TIM3 is configured as encoder mode 3 (SMS = 011), and the hardware state machine completes A/B phase decoding. The CPU only needs to read the CNT difference once in the control interruption to calculate the rotational speed, and the overhead is very small; at the same time, the hardware digital filter (IC1F = IC2F = 0001, 2 sampling) is used to suppress short pulse interference. The formula for calculating the speed is:
+
+[MATH]
+\text{RPM} = \frac{\Delta_{\text{count}} \times 60{,}000}
+{N_{\text{PPR}}}
+\label{eq:rpm}
+[/MATH]
+Among them, \Delta_count is the signed 16-bit counter difference (automatically handles overflow), and N_PPR is the number of pulses per rpm (including the deceleration ratio and \times4 mode). [SECTION] MCU Control Core (STM32F407G-DISC1) [SUBSECTION] MCU Selection and Specification STM32F407VG (Cortex-M4, 168 MHz, with FPU) Peripheral Rich resources and processing capacity enough to complete the 1 kHz control task of this project. The main peripherals used in this project are shown in Table [REF]. [TABLE CAPTION] STM32F407 peripherals used in this project.
+Peripheral | Function | Clock / Baud Rate
+TIM6 | 1 kHz PI control interrupt | TIM6CLK = 84 MHz, output 1 kHz
+TIM3 | Quadrature encoder interface | TIM3CLK = 84 MHz, external A/B phase counting
+ADC1 | Potentiometer + current sampling | ADC clock = 21 MHz
+SPI1 | W25Q64 Flash | SCK = 5.25 MHz
+SPI2 | FPGA duty cycle transmission | SCK = 5.25 MHz
+I2C1 | OLED SSD1306 display | Target SCL = 100 kHz
+USART2 | Serial debug (CH340G) | 115200 baud
+[/TABLE]
+
+[SUBSECTION] Pin allocation and peripheral mapping table [REF] lists the allocation of all 16 signal pins. [TABLE CAPTION] STM32F407 pin allocation table. 
+Pin | Peripheral | Connection Object
+PA0 | ADC1\_IN0 | Potentiometer (via RC low-pass filter)
+PA1 | ADC1\_IN1 | INA240A2 output
+PA2 | USART2\_TX | CH340G RXD
+PA3 | USART2\_RX | CH340G TXD
+PA4 | SPI1\_CS | W25Q64 chip select (software NSS)
+PA5 | SPI1\_SCK | W25Q64 clock
+PA6 | SPI1\_MISO | W25Q64 data output (MISO)
+PA7 | SPI1\_MOSI | W25Q64 data input (MOSI)
+PB6 | I2C1\_SCL | OLED SCL
+PB7 | I2C1\_SDA | OLED SDA
+PB12 | SPI2\_CS | FPGA cs\_n (software NSS)
+PB13 | SPI2\_SCK | FPGA sck
+PB14 | SPI2\_MISO | FPGA miso (unused)
+PB15 | SPI2\_MOSI | FPGA mosi
+PC6 | TIM3\_CH1 | Encoder phase A
+PC7 | TIM3\_CH2 | Encoder phase B
+[/TABLE]
+
+[SECTION] FPGA PWM generation module (AX309 Spartan-6) [SUBSECTION] FPGA's role STM32F407 has its own hardware PWM timer, which can also be directly output from the function. Out PWM. This project implements the PWM generation module in FPGA, mainly to verify the SPI slave reception logic and the 12-bit PWM comparator. FPGA receives the duty cycle value sent by STM32 through SPI2 and updates the PWM output after the complete data frame. The AX309 development board is connected to the STM32 and the motor drive module through the J3 expansion port, and the key pins are shown in Table [REF]. [TABLE CAPTION] AX309 FPGA key pin connection.
+Signal | FPGA Pin | J3 Header | Connected To
+sck | C15 | J3-21 | STM32 PB13 (SPI2\_SCK)
+cs\_n | D16 | J3-23 | STM32 PB12 (SPI2\_CS)
+mosi | C16 | J3-24 | STM32 PB15 (SPI2\_MOSI)
+miso | E15 | J3-26 | STM32 PB14 (SPI2\_MISO, unused)
+pwm\_out | F16 | J3-31 | TB6612FNG PWMA
+[/TABLE]
+
+[SUBSECTION] PWM frequency AX309 development board on board 50 MHz crystal oscillator. The 12-bit counter returns to zero after counting to 4096, so:
+
+[MATH]
+f_{\text{PWM}} = \frac{f_{\text{clk}}}{2^{12}} = \frac{50 \times 10^6}{4096}
+\approx 12.207\,\text{kHz}
+\label{eq:pwm_freq}
+[/MATH]
+The frequency is higher than the buzzing range of common low-frequency motors, but it is still in the frequency band that can be perceived by some human ears; its main advantages are that the switching cycle is short and the 12-bit resolution is fine enough (the lowest effective bit = 100 \%/4096 ≈ 0.024\%), which can achieve smooth speed adjustment. The actual measured value of the logic analyzer: 12.207 kHz, which completely coincides with the theoretical value. [SECTION] The PWM output by the motor drive circuit (TB6612FNG) FPGA is only a 3.3 V logic control signal, which cannot directly power the motor. The JGA25-370 motor uses a 12 V power supply, and the operating current is significantly higher than the current that the FPGA pin can provide, so the system adds a TB6612FNG motor driver between the FPGA and the motor. FPGA is responsible for giving a PWM control signal, and TB6612FNG controls the 12 V motor power supply according to the signal and provides the actual required driving current to the motor.
+
+The PWM signal is connected to the PWMA pin of TB6612FNG. When the PWM output is high, the driver applies voltage to the motor; when the PWM is logic low, the driver enters the corresponding shutdown or continuation state. Due to the rapid repetition of this process, the current in the motor coil will not mutate immediately with each switch, and the equivalent average voltage obtained by the motor can be approximately expressed as
+
+[MATH]
+U_{\text{avg}} \approx D \times 12\,\text{V},
+[/MATH]
+
+Among them, D is the PWM duty cycle. The equivalent average voltage corresponding to the typical duty cycle is shown in the table [REF]. [TABLE CAPTION] The relationship between PWM duty cycle and equivalent average voltage. Duty Cycle | Equivalent Average Voltage | Motor State
+0\% | 0 V | Motor stopped
+25\% | ~3 V | Low-speed operation
+50\% | ~6 V | Mid-range duty cycle operation
+100\% | ~12 V | Full duty cycle operation
+[/TABLE]
+
+When the duty cycle increases, the average voltage obtained by the motor increases, usually manifested in an increase in speed and output torque. Therefore, the system realizes motor speed control by changing the PWM duty cycle. The H-bridge structure of TB6612FNG itself supports motor forward and reverse, but this project only uses one-way speed adjustment. Its control pin configuration is shown in Table [REF]. FPGA does not control the direction of the motor, but only adjusts the duty cycle through the PWMA pin. The VDD and Load in Figure [REF] correspond to the 12 V motor power supply and DC motor of this project respectively. AO1 and AO2 are the two H-bridge outputs connecting the motor loop. [FIGURE CAPTION] The basic principle of H-bridge motor drive. [TABLE CAPTION] TB6612FNG control signal wiring table.
+TB6612 Pin | Connected To | Notes
+PWMA | FPGA J3-31 (F16) | PWM duty cycle output from FPGA
+AIN1 | 3.3 V | Direction: forward rotation
+AIN2 | GND | Direction: forward rotation
+STBY | 3.3 V | Must be pulled high; chip is in standby if low
+VCC | 3.3 V | Driver logic supply
+VM | 12 V supply | Motor drive power
+GND | Common ground | Shared with STM32, FPGA, and current sensing module
+AO1 | INA240A2 IN+ | Connected to motor via current sensing module
+AO2 | Other motor terminal | Completes the H-bridge output loop
+[/TABLE]
+
+[SECTION] Power supply design and noise suppression The system adopts the method of separate power supply and logic power supply, and each module shares the ground. STM32F407G-DISC1 and AX309 FPGA development boards are powered by USB-connected PC respectively; the VM pin of TB6612FNG is provided by an external adjustable DC regulated voltage power supply, which is used to drive the motor, and its V The CC pin is connected to the 3.3 V logic power supply. Motor start-up and PWM speed adjustment will produce current changes and power supply fluctuations. Separating the motor power supply from the logic power supply of MCU and FPGA can reduce the impact of these interferences on digital communication and ADC sampling. Each module still needs to be kept in common, so that signals such as PWM, SPI and ADC have a unified level reference.
+
+[CHAPTER] MCU register-level software development This chapter explains the implementation of peripherals on the MCU side. The initialization and data sending and receiving of USART, ADC, SPI, I2C and timers are mainly completed through registers, and the basic functions such as delay follow the existing system functions of the project.
+
+[SECTION] Register-level peripheral driver [SUBSECTION] UART serial port is used to output the target speed, actual speed, current, duty cycle and PID intermediate quantity to the PC, which is convenient for observing the operating status of the system. According to the configuration requirements of the USART peripheral in RM0090 and combined with the pin reuse table of DS8626, USART2 is selected for this project, and the configuration results are shown in Table [REF]. [TABLE CAPTION] USART2 FUNCTION REQUIREMENTS AND CONFIGURATION.
+Requirement | Configuration | Register Setting
+TX and RX | PA2 (TX), PA3 (RX) | GPIOA AF7
+Peripheral clock | GPIOA, USART2 | AHB1 and APB1 clock enable
+Baud rate | 115200 baud | Configure BRR
+Data format | 8N1 | 8 bits, no parity, 1 stop bit
+TX/RX enable | TX and RX enabled simultaneously | TE, RE, UE set to 1
+[/TABLE]
+
+PA2 and PA3 are configured as AF7, push-pull output and no pull-up. According to RM0090, the reset value of OVER8 bits in USART\_CR1 is 0, which corresponds to 16 times oversampling. This project does not modify this bit, so when the APB1 clock is 42 MHz, the baud rate register is calculated as follows:
+
+[MATH]
+\text{USARTDIV} = \frac{f_{\text{APB1}}}{16 \times \text{BaudRate}}
+= \frac{42{,}000{,}000}{16 \times 115{,}200} \approx 22.786
+\quad\Rightarrow\quad \texttt{BRR = 0x16D}
+[/MATH]
+
+The sending function waits for the TXE flag position 1 of the SR register, and then writes the data to the DR register to avoid overwriting the bytes that have not been sent. USART2 is connected to the PC through an external CH340G USB serial port module, in which PA2 is connected to RXD of CH340G, and PA3 is connected to TXD, and remains common ground. The serial port parameters are 115200 baud, 8N1. [SUBSECTION] ADC STM32F407 CONTAINS THREE ADC PERIPERNAL INSTANCES OF ADC1, ADC2 AND ADC3, EACH OF WHICH HAS AN INDEPENDENT CONTROL AND DATA REGISTER. This project only uses ADC1 and selects two input channels: PA0 corresponds to ADC1\_IN0, which is used to collect potentiometer voltage; PA1 corresponds to ADC1\_IN1, which is used to collect current feedback. The program first selects the input channel through the SQR3 register of ADC1, and then starts the SWSTART position 1 to start the conversion. After the conversion is completed, the program waits for the EOC flag to be set to 1 and read the 12-bit result of 0–4095 from the DR register. The in-chip ADC of STM32F407 adopts a sequential approximative (SAR) structure. In the sampling stage, the internal sampling capacitor connects the input and saves the current voltage; in the conversion stage, the SAR logic gives the probe number from the highest bit, the internal DAC converts it into the probe voltage, and the comparator then compares the voltage with the sampling voltage. SAR retains or clears the current bit according to the comparison results, and continues to judge the next one. After 12 comparisons, the final 12-digit result is obtained. Its basic structure is shown in Figure [REF].
+
+[FIGURE CAPTION] The basic structure of SAR ADC. The ADC clock is generated by the APB2 clock through the shared prescaler. The APB2 clock is 84 MHz, and the data manual stipulates that the ADC clock is up to 36 MHz, so 42 MHz cannot be obtained by 2 frequency division. This project configures the ADCPRE of ADC\_CCR to 4 frequency divisions, so that the ADC clock is
+
+[MATH]
+f_{\text{ADCCLK}}=\frac{84\,\text{MHz}}{4}=21\,\text{MHz},
+[/MATH]
+
+The corresponding single ADC clock cycle is about 1/21 MHz=47.6 ns. The sampling time indicates the time when the internal sampling capacitor of the ADC is connected to the input signal, and its unit is the ADC clock cycle. The higher the impedance of the input source, the longer it usually takes to fully charge the sampling capacitor. The potentiometer output is connected to ADC after passing through an RC low-pass filter composed of 10 k resistance and 100 nF capacitance, so it adopts a longer 144 cycle; the current sampling amplifier has a lower output impedance and 28 cycles. The configuration of the two channels is shown in the table [REF]. [TABLE CAPTION] ADC1 dual-channel sampling configuration. Sampling Object | Pin and Channel | Sampling Time | Use
+Potentiometer output | PA0 / ADC1\_IN0 | 144 cycles (~6.86 μs) | Compute target speed
+Current amplifier output | PA1 / ADC1\_IN1 | 28 cycles (~1.33 μs) | Compute motor current
+[/TABLE]
+
+The 12-bit conversion process also requires 12 ADC clock cycles, so the total single conversion time of the two channels is about 7.43 s and 1.90 s respectively. This project generates an interrupt every 1 ms through TIM6, and reads the potentiometer, rotational speed and current feedback in turn during the interruption, completes the PID calculation and updates the PWM instruction. The total conversion of the two ADCs is about 9.33 s, which accounts for less than 1\% of this 1 ms, which will not significantly affect the rest of the calculations. The specific configuration of TIM6 will be explained in the timer section later. [SUBSECTION] SPI STM32 communicates with SPI1 and W25Q64 Flash respectively, and sends a 12-bit duty share to FPGA through SPI2. The main configuration and use of the two-way SPI are shown in the table [REF].
+
+[TABLE CAPTION] SPI1 and SPI2 configuration comparison.
+Interface | Device | Clock Frequency | Chip Select | Data Direction
+SPI1 | W25Q64 Flash | 5.25 MHz | PA4 | Bidirectional
+SPI2 | FPGA | 5.25 MHz | PB12 | Unidirectional (TX only)
+[/TABLE]
+
+SPI1 is mounted on the APB2 bus with a clock of 84 MHz. BR[2:0] in SPI1\_CR1 is configured as 011, corresponding to 16 frequency divisions, so
+
+[MATH]
+f_{\text{SPI1}}=\frac{84\,\text{MHz}}{16}=5.25\,\text{MHz}.
+[/MATH]
+
+SPI2 is mounted on the APB1 bus, and the clock is 42 MHz. BR[2:0] in SPI2\_CR1 is configured as 010, corresponding to 8 frequency divisions, so
+
+[MATH]
+f_{\text{SPI2}}=\frac{42\,\text{MHz}}{8}=5.25\,\text{MHz}.
+[/MATH]
+
+Both interfaces are hosted by STM32, configured as Mode 0, 8-bit data frame and MSB priority, and GPIO software control chip selection is used. [SUBSUBSECTION] THE SPI1 PID PARAMETER IS SAVED IN SRAM WHEN THE PROGRAM IS RUNNING, BUT THE DATA WILL BE LOST AFTER THE SRAM IS POWERED OFF, AND THE ADJUSTED PARAMETERS CANNOT BE RETAINED AFTER POWER-ON. STM32 internal Flash is mainly used to store programs, so this project uses an independent W25Q64 to save PID parameters, so that parameter storage is separated from program storage. W25Q64 can still retain data after power outage and can be read and written through SPI1; after the user saves the parameters, the system can read and continue to use it the next time it is powered on. SPI is a synchronous full-duple serial protocol: the host (STM32) is responsible for generating clock SCK and chip selection CS, and the data is shifted according to the MSB priority (Mode 0) on the rising edge of SCK; MOSI carries the data from the host to the slave, and the MISO carries the slave to The data of the host, CS pull-down means that the slave is selected, and CS pull-up means that the transaction is over. W25Q64 as a SPI slave will not actively initiate communication, and all operations are actively initiated by STM32 in the full frame format of CS↓ + instruction byte + address + data + CS↑. The communication timing is: lower the chip selection pin (select the slave), send and receive data bytes, and pull up the chip selection pin (release the slave). W25Q64FV is a NOR Flash with a capacity of 8 MB. Its basic storage unit is a floating gate transistor. The floating gate is surrounded by an insulating layer and can retain electrons after power outage. The charge in the floating gate will change the threshold voltage of the transistor, and the reading circuit identifies 0 and 1 by judging whether the transistor is conductive at a given voltage. Figure [REF] shows the programming process of the NOR Flash array. The address decoder selects the target word line according to the input address, and applies programming voltage to the bit line that needs to be written as 0, so that the corresponding transistor can complete the programming through thermal electron injection. Multiple storage bits that need to be changed to 0 in the same line can be programmed at the same time. [FIGURE CAPTION] Word line selection and bit programming principle of NOR Flash array. Figure [REF] shows the erasing process of the floating gate transistor. When erasing, the electrons in the floating gate undergo Fowler–Nordheim tunneling through the thin oxidation layer under the action of a strong electric field. After the electrons leave the floating grid, the threshold voltage of the transistor decreases, and the storage bit is restored from 0 to 1. [FIGURE CAPTION] F-N tunneling and erasing process of FLOTOX floating gate transistor. Therefore, the programming operation of NOR Flash can only change the storage bit from 1 to 0; to restore 0 to 1, the corresponding sector must be erased first. The main instructions used in this project are shown in Table [REF]. 
+[TABLE CAPTION] W25Q64 Main operating instructions.
+Operation | Command Code | Description
+Read ID | 0x90 | Returns manufacturer and device identifier
+Write Enable | 0x06 | Sets WEL bit before write or erase
+Read Data | 0x03 | Reads data sequentially from a given address
+Page Program | 0x02 | Writes up to 256 bytes in one operation
+Sector Erase | 0x20 | Restores a 4 KB sector to all-ones (0xFF)
+[/TABLE]
+
+Before each write or erase, the write enable command must be sent to make the WEL position 1. Since sector erasing will restore the entire 4 KB area to 1, erase the target sector before performing page programming when updating PID parameters. [FIGURE CAPTION] W25Q64 page programming instruction timing (SPI Mode). As shown in Figure [REF], the page programming transaction sends 0x02 instructions, 24-bit addresses and 1–256 bytes of data in turn, and then pulls up CS to start programming operations inside the chip. The figure describes the data frame inside a page programming instruction. According to the data manual, after the page programming or sector erasure command is completed, CS should maintain a high level of at least 50 ns before starting to read the status register, which is recorded as t_SHSL. During the debugging process, there was a problem that Flash reading was normal but writing and erasing failed. After checking, it was found that the status register was read too early after the write or erase command did not meet the above slice selection interval. The program adds a 1 ms delay after the end of the relevant transaction, which is much greater than the minimum requirement of 50 ns; after modification, writing and power-off readback return to normal. The PID parameter is stored at the starting position of Flash sector 0 (address 0x000000), occupying a total of 32 bytes. It includes a valid flag, three PID parameters of the speed loop, three PID parameters of the current loop, and a reserved position. The valid flag uses a fixed value 12345.678f to determine whether the area has saved valid data. After the system is powered on, check the logo first; read six PID parameters when the logo is correct, otherwise use the default parameters in the program. [SUBSUBSECTION] SPI2 SPI2 uses the project-customized two-byte protocol to send the duty cycle to FPGA. The CS edge is used as a frame determinator, and the FPGA locks the complete 12-bit duty cycle on the CS rising edge. The data frame format is shown in the table [REF].
+
+[TABLE CAPTION] SPI2 duty cycle data frame format.
+Transfer Order | Bit Field | Content
+Byte 0 | [7:4] | Fixed 0000
+Byte 0 | [3:0] | duty[11:8]
+Byte 1 | [7:0] | duty[7:0]
+[/TABLE]
+
+The PWM duty cycle is 12 bits, while SPI2 sends 8 bits of data each time, so STM32 splits the duty cycle into two bytes to send. The lower 4 bits of the first byte store the high 4 bits of the duty cycle, and the remaining 4 bits are padded with zeros; the second byte stores the low 8 bits of the duty cycle. After FPGA receives two bytes, the corresponding bits are re-spliced into a complete 12-bit duty cycle. SPI2 is configured as APB1/8 = 5.25 MHz, mode 0, 8-bit MSB priority. Since FPGA does not return data, MISO (PB14) can not be wired. [SUBSECTION] I2C This project uses I2C1 to drive SSD1306 OLED. STM32 is the host, which is responsible for generating clocks and sending addresses and displaying data; OLED is a slave, which returns responses and receives data after the address is matched. This project only writes commands and display data to OLED, and does not read OLED content. Unlike SPI, which selects devices through independent chip selection signals, I2C sends a 7-bit address on the shared bus to select the slave, so OLED does not need a separate chip selection pin. Both SCL and SDA use open-drain output. The device can actively pull down the bus, release the bus when the output is high, and pull up the line by the pull-up resistor. In this way, multiple devices can share the bus without causing a short circuit due to the opposite output level. SCL is high, SDA means START from high to low, and SDA from low to high to STOP; during normal transmission, SDA only changes when SCL is low. After sending every 8-bit data, the sender releases the SDA, and the OLED lowers the SDA in the 9th clock cycle to represent ACK. The main configuration of I2C1 is shown in Table [REF]. [TABLE CAPTION] I2C1 and SSD1306 communication configuration.
+Item | Configuration | Notes
+Pins | PB6 (SCL), PB7 (SDA) | AF4, open-drain output
+OLED address | 0x3C | Write address byte: 0x78
+Control byte | 0x00 / 0x40 | Command / display data
+APB1 clock | 42 MHz | I2C1 peripheral clock source
+Target SCL | 100 kHz | Standard mode
+[/TABLE]
+
+The 7-bit address of SSD1306 is 0x3C. When sending a write operation, the program moves the address to the left and writes the read and write flag 0 in the lowest bit, so the address byte actually sent on the bus is
+
+[MATH]
+(\texttt{0x3C} \ll 1) \,|\, 0 = \texttt{0x78}.
+[/MATH]
+
+After the address, you need to send a control byte: 0x00 means that the follow-up content is an OLED command, and 0x40 means that the follow-up content is display data. [FIGURE CAPTION] I2C host read and write operation bus timing. Figure [REF] also gives two timings of host writing and host reading. In the host write operation, the address and data are sent by the host, and the ACK is returned by the slave; in the host read operation, the data is sent by the slave, and ACK or NACK is generated by the host. This project only uses the host write operation in the figure: STM32 sends OLED addresses, control bytes and commands or displays data in turn. After each byte sent, OLED returns ACK, and finally STM32 generates STOP conditions. I2C1 is located on the APB1 bus, and the input clock is 42 MHz. According to RM0090, the maximum SCL frequency supported by the I2C standard mode is 100 kHz, and this project is configured according to this frequency, so
+
+[MATH]
+\texttt{CCR}=\frac{42\,\text{MHz}}{2\times100\,\text{kHz}}=210.
+[/MATH]
+
+RM0090 At the same time, it is stipulated that the maximum rise time of SCL in standard mode is 1000 ns. This time corresponds to 42 APB1 clock cycles, so TRISE is configured as 42+1=43. The program finally configured CR2, CCR and TRISE to 42, 210 and 43 respectively. When sending data, the CPU writes the address, control byte and data into I2C1->DR in turn. I2C1 peripherals complete data shift and timing control according to the I2C protocol, and SCL and SDA signals are output to OLED by PB6 and PB7 respectively. Update the internal controller or video memory after receiving the OLED. During the communication process, timeout is set for steps such as waiting bus idle, START, address response and data sending; when an abnormality occurs, STOP is generated and the error mark is cleared to avoid OLED communication failure causing the program to stop the waiting state. [SUBSECTION] TIMER THIS PROJECT USES TIM3 TO COMPLETE THE ENCODER COUNT, AND USES TIM6 CYCLE TO TRIGGER THE CONTROL CYCLE. THE CONFIGURATION IS SHOWN IN TABLE [REF]. [TABLE CAPTION] Timer function and configuration.
+Timer | Function | Key Configuration | Result
+TIM3 | Encoder pulse counting | PC6/PC7, encoder mode 3 | Quadrature (×4) counting
+TIM6 | Periodic control interrupt | PSC=83, ARR=999 | 1 kHz update interrupt
+[/TABLE]
+
+TIM3 counts the rising and falling edges of the two-phase signals of the encoder A and B, and enables input digital filtering to suppress short-term interference. The input clock of TIM6 is 84 MHz. After pre-frequency division and auto-reload, there is an update interruption every 1 ms. The specific execution process of the control cycle will be explained later. [SECTION] Signal conditioning [SUBSECTION] Moving average filter program obtains a new sample every 1 ms and averages the most recent N samples:
+
+[MATH]
+\bar{x}[n]=\frac{1}{N}\sum_{k=0}^{N-1}x[n-k].
+[/MATH]
+
+The longer the window, the smoother the data after filtering, but the slower the response to input changes. This project uses a 16-point sliding average for slow-changing potentiometer signals and an 8-point sliding average for current and speed signals to reduce noise and maintain a faster response. Only one new sample is added to each call, not 16 or 8 ADC conversions in a row. [TABLE CAPTION] Software filter configuration of each signal.
+Signal | Window Length | Latency | Function Name
+Potentiometer ADC | 16 samples | Window 16 ms, group delay ~7.5 ms | ADC1\_Read\_Filtered()
+Encoder RPM | 8 samples | Window 8 ms, group delay ~3.5 ms | RPM\_Filter()
+Motor current | 8 samples | Window 8 ms, group delay ~3.5 ms | ADC1\_ReadCurrent\_Filtered\_mA()
+[/TABLE]
+
+[SUBSECTION] Zero processing and integral limit During debugging, it was found that after the potentiometer was turned to zero, the ADC reading was still around 9, and the corresponding target speed was
+
+[MATH]
+\frac{9}{4095}\times100\approx0.22\,\text{RPM}.
+[/MATH]
+
+In order to avoid non-zero speed given near zero, the program directly treats the ADC reading of less than 50 to the target speed of 0. The threshold corresponds to
+
+[MATH]
+\frac{50}{4095}\times100\approx1.22\,\text{RPM},
+[/MATH]
+
+Therefore, a short range of the starting position of the potentiometer will not produce a given speed. The integral terms and output are also limited in PID\_Calc(). [CHAPTER] CASCADE PI CONTROL ALGORITHM THIS CHAPTER EXPLAINS THE IMPLEMENTATION OF CASCADE CONTROL ALGORITHM. The program uses the general PID function, but the differential coefficients of the speed loop and the current loop are set to 0, so the actual cascade PI control is used. The differential term can suppress rapid changes in advance and reduce overshoot, but it will also amplify the encoder count fluctuations and current sampling ripples. In order to keep the control output stable, the differential sub-item is not enabled for the time being. The following introduces the discrete calculation method of the general PID, and then explains the connection relationship, parameter settings and 1 kHz control loop of the two PI loops. [SECTION] The control function in the PI mathematical model program retains the complete PID structure. The PID controller calculates the control output according to the error between the target value and the feedback value, and the error is defined as
+
+[MATH]
+e(t)=r(t)-y(t),
+[/MATH]
+
+Among them, r(t) is the target value, y(t) is the actual measured value, and u(t) is the controller output. The expression of continuous PID is:
+
+[MATH]
+u(t) = K_p\,e(t) + K_i\int_0^t e(\tau)\,d\tau + K_d\,\frac{de(t)}{dt}
+[/MATH]
+
+In the formula, the proportional term immediately adjusts the output according to the current error; the accumulated past error of the integral term is used to reduce the steady-state error; the differential term corrects the output according to the change of the error, which is used to suppress excessive changes. The program calculates PID every T=1 ms. After changing the integral to error accumulation and changing the differentiation to the difference of two adjacent errors, the discrete form used by the program is:
+
+[MATH]
+u[n] = K_p\,e[n]
++ K_i \sum_{k=0}^{n} e[k]
++ K_d\,\bigl(e[n] - e[n-1]\bigr)
+\label{eq:pid_discrete}
+[/MATH]
+
+Among them, e[n] is the error of this time, e[n-1] is the error of the previous time, and u[n] is the output of this calculation. The integral coefficient in the code has been multiplied by the sampling cycle T, and the differential coefficient has been divided by T, so the sampling cycle is no longer multiplied separately in the program. K_i and K_d in the following parameter table both refer to the coefficients actually used by the program. This project sets the K_d of both loops to 0, so the PI control formula actually used is
+
+[MATH]
+u[n] = K_p\,e[n] + K_i \sum_{k=0}^{n} e[k].
+\label{eq:pi_discrete}
+[/MATH]
+
+If the output has reached the upper limit, but the integral continues to increase, the control output will remain saturated for a long time. In order to reduce this impact, the program limits the accumulation of points to the following range:
+
+[MATH]
+-I_{\max}
+\leq \sum_{k=0}^{n} e[k]
+\leq I_{\max}
+[/MATH]
+
+The output is also limited to the range of [u_, u_]. The output range of the speed outer loop is 0–400 mA, and the output range of the current inner loop is 0–4095. When the output reaches the upper limit or lower limit, if continuous integration will further exceed the range of the output, the program will not retain the result of this integration step to avoid excessive integral accumulation. [TABLE CAPTION] Symbol description in the PID/PI mathematical model.
+Symbol | Meaning
+r | Reference (target) value
+y | Measured (feedback) value
+e = r − y | Error between target and measured value
+u | Controller output
+K_p | Proportional gain: effect of current error on output
+K_i | Integral gain: effect of accumulated past error on output
+K_d | Derivative gain: effect of error rate-of-change on output
+T | Control period; 1 ms in this project
+n | Current sample index
+k | Summation index in the integral term
+I_max | Absolute upper bound on the accumulated integral
+u_min, u_max | Lower and upper output limits
+[/TABLE]
+
+The same set of calculation functions is used for both speed loop and current loop, but the K_d of both loops is 0, and different PI parameters and output ranges are used. The specific values will be given separately later. [SECTION] Cascade structure design Cascade control is composed of velocity outer loop and current inner loop. The speed outer loop calculates the target current according to the error between the target speed and the actual speed; since the DC motor torque is approximately proportional to the current, the target current reflects the current required driving torque. The current inner loop then calculates the 12-bit PWM duty cycle according to the error between the target current and the actual measured current. The output limit of the speed outer loop is 0–400 mA, which is used to limit the given value of the current inner loop. [FIGURE: cascade_pi_block_diagram] [FIGURE CAPTION] Cascade PI control structure block diagram. [TABLE CAPTION] Symbol description in the cascade PI block diagram.
+Symbol | Meaning | Unit / Range
+\omega_ref | Target speed | RPM
+\omega | Measured speed | RPM
+e_ω | Speed error: ω_ref − ω | RPM
+I_ref | Target current from speed loop | 0–400 mA
+I | Actual current from sensing module | mA
+e_I | Current error: I_ref − I | mA
+d | PWM duty cycle value sent to FPGA | 0–4095
+[/TABLE]
+
+CASCADE CONTROL USUALLY REQUIRES THE DYNAMIC RESPONSE OF THE INNER LOOP TO BE FASTER THAN THE INNER LOOP [CITE].. The speed loop and current loop of this project are both calculated at a frequency of 1 kHz, but the two functions are different: the speed loop generates the target current according to the rotational speed error, and the current loop directly adjusts the PWM instruction according to the error between the target current and the actual measured current. Since the current change is usually faster than the mechanical speed change, the current loop can adjust the current deviation before the speed changes significantly. [SECTION] Speed outer loop design This project gradually adjusts the PI parameters according to the operation of the motor. When debugging, first adjust the proportional gain K_p to observe whether the system has obvious oscillations; then adjust the integral gain K_i, which determines the size of the error accumulation, reduce the difference between the target value and the actual value after the system is stable, and avoid the actual value obviously exceeding the target value during the response process. The speed outer loop calculates the target current according to the error between the target speed and the actual speed. The current parameters are shown in the table [REF]. [TABLE CAPTION] SPEED OUTER LOOP PI PARAMETER.
+Parameter | Value | Notes
+K_p | 1.5 | Proportional term = 150 mA at 100 RPM error
+K_i | 0.1 | Reduces steady-state speed error
+u_min | 0 mA | Lower limit of target current
+u_max | 400 mA | Upper limit of target current
+I_max | 4000 | Maximum integral contribution: 400 mA
+[/TABLE]
+
+[SECTION] Current inner loop design The current inner loop calculates the 12-bit PWM instruction according to the error between the target current and the actual measured current. In debugging, the oscillation of the duty cycle is obvious when K_p=20 and K_i=0.5. After reducing the gain, the parameters shown in Table [REF] are obtained. [TABLE CAPTION] Current inner loop PI parameter.
+Parameter | Value | Notes
+K_p | 5.0 | Duty cycle oscillation reduced after tuning
+K_i | 0.2 | Reduces steady-state current error
+u_min | 0 | Lower duty cycle limit
+u_max | 4095 | Upper duty cycle limit (12-bit full scale)
+I_max | 8000 | Maximum integral contribution: 1600
+[/TABLE]
+
+The gain values of the two loops cannot be directly compared. The unit of the speed loop K_p is mA/RPM, and the unit of the current loop K_p is PWM count per milliampere (count/mA); the input, output and range of the two are different. The above parameters are used for the current no-load debugging. [SECTION] 1 kHz control loop realizes TIM6 to generate an update interruption every 1 ms. Encoder reading, ADC conversion, two-level PI operation and SPI transmission are all completed in this interrupt, so the total execution time of these operations must be less than 1 ms. TIM6\_DAC\_IRQHandler is executed once every 1 ms, and the execution order is as follows: - Update the encoder: calculate \Delta_count and update the RPM after filtering. - Read the potentiometer ADC (16-point mean filter) , and carry out zero processing. - Speed PI: e_ = \omega_ref - \omega_meas I_ref[0,400] mA. - Read current ADC (8-point mean filtering). - Current PI: e_I = I_ref - I_meas d [0, 4095]. - Send the duty cycle d (2 bytes) to FPGA through SPI2. The ADC clock is 21 MHz. The sampling time of potentiometer and current channel is 144 and 28 ADC clock cycles respectively, and 12-bit conversion also needs 12 cycles, so the two-way conversion time is
+
+[MATH]
+t_{\mathrm{ADC}}
+=\frac{144+12}{21\,\mathrm{MHz}}
++\frac{28+12}{21\,\mathrm{MHz}}
+\approx 9.33\,\mu\mathrm{s}.
+[/MATH]
+
+The SPI2 clock is 5.25 MHz; transmitting two bytes requires 16 SCK cycles:
+
+[MATH]
+t_{\mathrm{SPI}}=\frac{16}{5.25\,\mathrm{MHz}}
+\approx 3.05\,\mu\mathrm{s}.
+[/MATH]
+
+The total time of the two is about 12.38 s. The interrupted cycle of 1ms after testing is enough to use. [CHAPTER] FPGA development FPGA design contains three VHDL modules, using Xilinx ISE 14.7 synthesis, and the target device is Spartan-6 XC6SLX9-2FTG256. [SECTION] SPI slave receiver (spi\_slave.vhd [SUBSECTION] Cross-clock domain synchronization Traditional SPI slave can directly use SCK to drive the shift register, and then transmit the complete data to the FPGA system Unified clock domain. The SCK of this project is 5.25 MHz, which is lower than the 50 MHz system clock of FPGA, so the implementation of system clock oversampling SCK is adopted, so that SPI reception and subsequent PWM logic work in the 50 MHz clock domain; similar Realize the SPI slage example of visible FPGA4Fun [CITE]. SCK comes from STM32 and has no fixed phase relationship with the FPGA internal clock. If it is sampled directly, metastable states may be generated when the sampling moment falls near the SCK jump edge. The program uses two series triggers to synchronize the SCK and detect the rising edge according to the two-level sampling value. The first level receives asynchronous input, and the second level samples again in the next clock cycle, thus reducing the probability of metastable propagation to the post-stage logic. The core code is as follows: [CODE: SCK two-level synchronization chain.]
+p_sync : process(clk)
+begin
+ if rising_edge(clk) then
+ sck_d1 <= sck;
+ sck_d2 <= sck_d1;
+ end if;
+end process;
+sck_rise <= sck_d1 and (not sck_d2);  -- single-cycle rising-edge pulse
+[/CODE]
+
+[SUBSECTION] Two-byte frame reception and duty cycle reorganization PWM's duty cycle ratio is 12 bits, while SPI2 uses 8-bit data frames, so STM32 splits the duty cycle into two bytes to send. The low 4 bits of the first byte store d[11:8], and the second byte stores d[7:0], and its reorganization relationship is
+
+[MATH]
+d[11:0]=\{\text{Byte0}[3:0],\,\text{Byte1}[7:0]\}.
+[/MATH]
+
+After CS\_N is lowered, FPGA samples one MOSI data on each SCK rising edge and records the received number of bits through bit\_cnt. After the first 8-bit reception is completed, the program saves the low 4 bits of the first byte; after the last 8-bit reception is completed, the two parts are spliced into 12-bit duty\_out. CS\_N rise indicates the end of a frame transmission, and the module generates a duty\_valid signal for a clock cycle, so that the PWM module updates the duty cycle. The core code is as follows: 
+[CODE: SPI data shift and duty cycle splicing.]
+if cs_rise = '1' then
+ duty_valid <= '1';
+ bit_cnt <= 0;
+ shift_reg <= (others => '0');
+
+elsif sck_rise = '1' and cs_d1 = '0' then
+ shift_reg <= shift_reg(6 downto 0) & mosi_d1;
+
+ if bit_cnt = 7 then
+ temp_hi <= shift_reg(2 downto 0) & mosi_d1;
+ bit_cnt <= 8;
+ elsif bit_cnt = 15 then
+ duty_out <= temp_hi & (shift_reg(6 downto 0) & mosi_d1);
+ bit_cnt <= 0;
+ else
+ bit_cnt <= bit_cnt + 1;
+ end if;
+end if;
+[/CODE]
+
+[SECTION] PWM generator (pwm\_gen.vhd 12-bit free counter compares with the locked duty cycle register: [CODE: PWM comparator.] Pwm_out <= '1' when (pwm_cnt < duty_reg) else '0'; [/CODE] SPI output duty\_valid selection communication number only updates duty\ at the frame boundary _Reg, to prevent burrs in the middle of the PWM cycle. [SECTION] Top-level integration (top.vhd top.vhd connects the SPI receiving module with the PWM module. The SPI receiving module outputs 12-bit duty cycle and data effective signal. After receiving the valid signal, the PWM module updates the duty cycle and generates PWM output. The FPGA pin corresponding to each input and output signal is specified by pin.ucf, and the specific allocation is shown in the table [REF]. [TABLE CAPTION] FPGA pin allocation (AX309 J3 expansion interface). Signal | FPGA pin | J3 pin | Connection object clk | P8 | On-board crystal oscillator | –- sck | C15 | J3-21 | STM32 PB13 cs\_n | D16 | J3-23 | STM32 PB12 mosi | C16 | J3-24 | STM32 PB15 miso | E15 | J3-26 | STM32 PB14 (not used) pwm\_out | F16 | J 3-31 | TB6612 PWMA [/TABLE] [CHAPTER] System Integration and Testing This chapter introduces the test results after system integration and the problems found in debugging. At present, FPGA PWM frequency, Flash parameter saving and current sampling tests have been completed; speed steady-state error, step response and load current response still need to be retested. [SECTION] Test content and method After completing the connection of STM32F407, AX309 FPGA, motor drive module, INA240A2 and encoder, test the system. The test results are divided into three categories: physical photo recording hardware connection and OLED display; serial port and logic analyzer screenshot recording parameter storage, SPI and PWM signals; serial port operation data is used to draw speed, current and PWM curves. See Table [REF] for the specific method. [TABLE CAPTION] System function test project. Test Project | Tools or Conditions | Test Method System Operating Status | Camera, OLED Display Shooting Hardware Connection and OLED Display Speed, Current and PWM Data FPGA PWM Output | Logic Analyzer, J3-31 Pin Test Quantity PWM period and compare with the theoretical frequency Flash parameter save | Serial command, W25Q64 save PI parameter, re-power after power outage and read current sampling | 100 RPM, output shaft no external load record ADC motor electricity after conversion Flow closed-loop operation process | UART continuously outputs running data to draw speed, current and PWM curves by time [/TABLE] In order to facilitate follow-up processing, the serial port outputs the following fields in a fixed period: [CODE: verbatim] time_ ms,target_rpm,measured_rpm,current_ref_mA,current_mA,pwm [/CODE] The serial output frequency should be lower than the control loop frequency, for example, once output every 10–20 ms, Avoid serial transmission affecting 1 kHz control interruption. [SECTION] Experimental Results [SUBSECTION] System Operation Status After the system is powered on, OLED displays the target speed, actual speed, PWM duty cycle and motor current. Physical photos can show that the system has been operating normally, but the speed response still needs to be analyzed through continuous data curves. [FIGURE CAPTION] System physical and OLED operation status. [SUBSECTION] FPGA PWM output FPGA uses a 50 MHz clock to drive a 12-bit counter, and the theoretical frequency of PWM is [MATH] f_{\mathrm{PWM}}=\frac{50\,\ mathrm{MHz}}{4096}=12.20703125\,\mathrm{kHz}. [/MATH] The logic analyzer measured that the PWM frequency of the J3-31 pin is 12.207 kHz, which is consistent with the theoretical calculation results, indicating that the FPGA counter and PWM output are working normally. [FIGURE CAPTION] FPGA PWM output waveform. [SUBSECTION] W25Q64 parameter storage W25Q64 read the device identification is 0xEF16. After modifying and saving the PI parameters through the serial port, the saved value can still be read when the power is cut off and the power is on, indicating that the parameter saving and power-on loading functions are normal. [FIGURE CAPTION] W25Q64 parameter saving and power-on loading results. [SUBSECTION] ADC current sampling When the current is zero, the original value of ADC is about 2200, corresponding to the output of INA240A2 is about 1.773 V, and the program takes this value as zero. When the output shaft is not connected to the external load and the target speed is 100 RPM, the measured motor current is about 30 mA. The result shows that ADC can read the current change when the motor is running. Since independent ammeters have not been used for comparison, the measurement accuracy is not evaluated in this section. [FIGURE CAPTION] ADC current sampling results. [SUBSECTION] The closed-loop speed control system can read the encoder speed and update the PWM instructions according to the PI calculation results. During the test, the target speed, actual speed, target current, measured current and PWM instructions are continuously recorded through UART, and then the curve is drawn by time. The speed curve is used to calculate the steady-state error, rise time and overshoot; the current and PWM and PWM curves are used to observe the start-up and speed adjustment process. [FIGURE CAPTION] Closed-loop speed step response. [FIGURE CAPTION] Dynamic response of current and PWM. [SECTION] DEBUGGING PROBLEMS AND HANDLING TABLE [REF] LISTS THE MAIN PROBLEMS AND HANDLING METHODS ENCOUNTERED IN SYSTEM DEBUGGING. [TABLE CAPTION] Main debugging problems and handling methods. Problem | Phenomenon | Cause and Handling Method Serial port no output ST-Link virtual serial port no data Change to external CH340G, and connect USART2 through PA2 and PA3. Current conversion error. The current reading is about 2.5 times higher. INA240 is version A2, and the gain should be 50 V/V; correct the gain parameters in the software. Current loop oscillation PWM's duty cycle fluctuates significantly. Reduce the current loop parameters and adjust K_p from 20 to 5, and K_i from 0.5 to 0.2. The encoder has no feedback. The RPM is 0, and the PWM continues to increase. The power supply of the encoder is not connected. After the power supply is restored, the speed feedback returns to normal. The zero bias of the potentiometer still produces a small rotational speed. Given that the zero-bit ADC reading is about 9, the program will treat the reading less than 50 as 0. Flash write failure. After saving, the power is lost, and the readback is 0xFFFFFFFF. The interval between the two operations of CS is insufficient; increase the waiting time after CS pulls up, and add post-write readback verification. [/TABLE] [SECTION] Summary of this chapter Existing tests show that FPGA PWM output, W25Q64 parameter saving and INA240A2 current sampling functions are normal. The system has been able to operate in a closed loop, but it still lacks steady-state error, 0–100 RPM step response and load current data at different target speeds. Only after completing these tests can we analyze the control effect of the cascade PI.
+
+
+Rev.\ 19, 2021. [Online]. Available: \url{https://www.st.com}
+
+
+Current-Sense Amplifier Datasheet}, SBOS566D, 2015.
+
+
+2015.
+
+Controller Datasheet}, 2008.
+
+
+Available: \url{https://www.fpga4fun.com/SPI2.html}.
+
+[CHAPTER] Key Source Code
+
+[SECTION] TIM6 1 kHz PI Control Loop
+
+[CODE: TIM6_DAC_IRQHandler — 1 kHz cascade PI control loop]
+void TIM6_DAC_IRQHandler(void)
+{
+ if (TIM6->SR & TIM_SR_UIF) {
+ TIM6->SR &= ~TIM_SR_UIF;
+
+ Encoder_Update();
+
+ uint16_t adc_val = ADC1_Read_Filtered();
+ float setpoint_rpm = (adc_val < 50U) ? 0.0f
+ : (float)adc_val * (MOTOR_MAX_RPM / 4095.0f);
+
+ float current_setpoint = PID_Calc(&speed_pid,
+ setpoint_rpm, g_encoder_rpm);
+
+ float measured_current = ADC1_ReadCurrent_Filtered_mA();
+
+ float duty_f = PID_Calc(&current_pid,
+ current_setpoint, measured_current);
+ uint16_t duty = (uint16_t)duty_f;
+
+ uint8_t hi = (duty >> 8U) & 0x0FU;
+ uint8_t lo = duty & 0xFFU;
+ FPGA_CS_LOW();
+ SPI2_ReadWriteByte(hi);
+ SPI2_ReadWriteByte(lo);
+ FPGA_CS_HIGH();
+
+ g_pid_duty = duty;
+ }
+}
+[/CODE]
+
+[SECTION] Positional-form PID Implementation
+
+[CODE: PID_Calc — positional-form PID with anti-windup]
+float PID_Calc(PID_TypeDef *pid, float setpoint, float feedback)
+{
+ float err = setpoint - feedback;
+
+ pid->integral += err;
+ if (pid->integral > pid->integral_max)
+ pid->integral = pid->integral_max;
+ else if (pid->integral < -pid->integral_max)
+ pid->integral = -pid->integral_max;
+
+ float deriv = pid->kd * (err - pid->err_prev);
+ pid->err_prev = err;
+
+ float output = pid->kp * err + pid->ki * pid->integral + deriv;
+
+ if (output > pid->out_max) {
+ output = pid->out_max;
+ if (err > 0.0f) pid->integral -= err;
+ } else if (output < pid->out_min) {
+ output = pid->out_min;
+ if (err < 0.0f) pid->integral -= err;
+ }
+ return output;
+}
+[/CODE]
