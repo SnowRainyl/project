@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Inc;../BSP/uart/include;../BSP/spi/include;../BSP/flash/include;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include</IncludePath>
+              <IncludePath>../Inc;../BSP/uart/include;../BSP/spi/include;../BSP/flash/include;../BSP/adc/include;../BSP/encoder/include;../BSP/i2c/include;../BSP/oled/include;../BSP/pid/include;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -423,6 +423,36 @@
               <FileName>w25q64.c</FileName>
               <FileType>1</FileType>
               <FilePath>../BSP/flash/src/w25q64.c</FilePath>
+            </File>
+            <File>
+              <FileName>adc_reg.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../BSP/adc/src/adc_reg.c</FilePath>
+            </File>
+            <File>
+              <FileName>encoder_reg.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../BSP/encoder/src/encoder_reg.c</FilePath>
+            </File>
+            <File>
+              <FileName>custom_i2c.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../BSP/i2c/src/custom_i2c.c</FilePath>
+            </File>
+            <File>
+              <FileName>OLED_SSD1306.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../BSP/oled/src/OLED_SSD1306.c</FilePath>
+            </File>
+            <File>
+              <FileName>Font_EN.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../BSP/oled/src/Font_EN.c</FilePath>
+            </File>
+            <File>
+              <FileName>pid.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../BSP/pid/src/pid.c</FilePath>
             </File>
           </Files>
         </Group>

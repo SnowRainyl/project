@@ -17,6 +17,8 @@ extern void     Motor_Control_Init(void);
 extern PID_TypeDef speed_pid;
 extern PID_TypeDef current_pid;
 
+void SystemClock_Config(void);
+
 /* Flash storage: sector 0, magic sentinel to detect valid data */
 #define PID_FLASH_ADDR   0x000000UL
 #define PID_FLASH_MAGIC  12345.678f
@@ -148,6 +150,13 @@ static void handle_pid_cmd(const char *cmd)
         UART_SendString("Commands:\r\n"
                         "  set sp/si/sd <val>  speed kp/ki/kd\r\n"
                         "  set cp/ci/cd <val>  current kp/ki/kd\r\n"
+                        "  examples:\r\n"
+                        "    set sp 2.0    speed kp\r\n"
+                        "    set si 0.01   speed ki\r\n"
+                        "    set sd 0.0    speed kd\r\n"
+                        "    set cp 5.0    current kp\r\n"
+                        "    set ci 0.2    current ki\r\n"
+                        "    set cd 0.0    current kd\r\n"
                         "  show   print params\r\n"
                         "  save   write to Flash\r\n"
                         "  load   read from Flash\r\n");
